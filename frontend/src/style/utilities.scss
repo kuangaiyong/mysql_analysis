@@ -1,0 +1,604 @@
+// ============================================
+// 通用工具类 - Utilities
+// ============================================
+// 基于项目CSS变量系统，提供通用工具类
+// 遵循最小化原则，只添加项目实际需要的类
+// 
+// 使用方式：
+// 1. 在模板中直接使用：class="u-mb-20"
+// 2. 替换内联样式：style="width: 200px" → class="input-lg"
+// ============================================
+
+// ========== Spacing 工具类 ==========
+// 基于variables.scss中定义的间距变量
+
+// Margin Bottom
+.u-mb-4 { margin-bottom: var(--spacing-xs); }   // 4px
+.u-mb-8 { margin-bottom: var(--spacing-sm); }   // 8px
+.u-mb-12 { margin-bottom: var(--spacing-md); }  // 12px
+.u-mb-16 { margin-bottom: var(--spacing-lg); }  // 16px
+.u-mb-20 { margin-bottom: var(--spacing-xl); }  // 20px
+.u-mb-24 { margin-bottom: var(--spacing-2xl); } // 24px
+
+// Margin Top
+.u-mt-4 { margin-top: var(--spacing-xs); }
+.u-mt-8 { margin-top: var(--spacing-sm); }
+.u-mt-12 { margin-top: var(--spacing-md); }
+.u-mt-16 { margin-top: var(--spacing-lg); }
+.u-mt-20 { margin-top: var(--spacing-xl); }
+.u-mt-24 { margin-top: var(--spacing-2xl); }
+
+// Margin Left
+.u-ml-4 { margin-left: var(--spacing-xs); }
+.u-ml-8 { margin-left: var(--spacing-sm); }
+.u-ml-12 { margin-left: var(--spacing-md); }
+.u-ml-16 { margin-left: var(--spacing-lg); }
+.u-ml-20 { margin-left: var(--spacing-xl); }
+
+// Margin Right
+.u-mr-4 { margin-right: var(--spacing-xs); }
+.u-mr-8 { margin-right: var(--spacing-sm); }
+.u-mr-12 { margin-right: var(--spacing-md); }
+.u-mr-16 { margin-right: var(--spacing-lg); }
+
+// Padding
+.u-p-4 { padding: var(--spacing-xs); }
+.u-p-8 { padding: var(--spacing-sm); }
+.u-p-12 { padding: var(--spacing-md); }
+.u-p-16 { padding: var(--spacing-lg); }
+.u-p-20 { padding: var(--spacing-xl); }
+.u-p-24 { padding: var(--spacing-2xl); }
+
+// Padding X (horizontal)
+.u-px-4 { padding-left: var(--spacing-xs); padding-right: var(--spacing-xs); }
+.u-px-8 { padding-left: var(--spacing-sm); padding-right: var(--spacing-sm); }
+.u-px-16 { padding-left: var(--spacing-lg); padding-right: var(--spacing-lg); }
+.u-px-20 { padding-left: var(--spacing-xl); padding-right: var(--spacing-xl); }
+
+// Padding Y (vertical)
+.u-py-4 { padding-top: var(--spacing-xs); padding-bottom: var(--spacing-xs); }
+.u-py-8 { padding-top: var(--spacing-sm); padding-bottom: var(--spacing-sm); }
+.u-py-16 { padding-top: var(--spacing-lg); padding-bottom: var(--spacing-lg); }
+
+// ========== Width 工具类 ==========
+
+// 输入框宽度（基于variables.scss中定义的变量）
+.input-xs { width: 80px; }
+.input-sm { width: var(--input-width-sm); }   // 120px
+.input-md { width: var(--input-width-md); }   // 150px
+.input-lg { width: var(--input-width-lg); }   // 200px
+.input-xl { width: var(--input-width-xl); }   // 280px
+
+// 通用宽度
+.w-full { width: 100%; }
+.w-auto { width: auto; }
+.w-screen { width: 100vw; }
+
+// ========== Height 工具类 ==========
+
+.h-full { height: 100%; }
+.h-screen { height: 100vh; }
+.h-auto { height: auto; }
+
+// ========== Layout 工具类 ==========
+
+// Display
+.block { display: block; }
+.inline-block { display: inline-block; }
+.inline { display: inline; }
+.hidden { display: none; }
+
+// Flexbox
+.flex { display: flex; }
+.inline-flex { display: inline-flex; }
+.flex-row { flex-direction: row; }
+.flex-col { flex-direction: column; }
+.flex-wrap { flex-wrap: wrap; }
+.flex-nowrap { flex-wrap: nowrap; }
+.flex-1 { flex: 1 1 0%; }
+.flex-auto { flex: 1 1 auto; }
+.flex-none { flex: none; }
+.flex-grow { flex-grow: 1; }
+.flex-shrink-0 { flex-shrink: 0; }
+
+// Flex 对齐
+.items-start { align-items: flex-start; }
+.items-center { align-items: center; }
+.items-end { align-items: flex-end; }
+.items-stretch { align-items: stretch; }
+.items-baseline { align-items: baseline; }
+
+.justify-start { justify-content: flex-start; }
+.justify-center { justify-content: center; }
+.justify-end { justify-content: flex-end; }
+.justify-between { justify-content: space-between; }
+.justify-around { justify-content: space-around; }
+.justify-evenly { justify-content: space-evenly; }
+
+// Gap
+.gap-1 { gap: 4px; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.gap-4 { gap: 16px; }
+.gap-5 { gap: 20px; }
+.gap-6 { gap: 24px; }
+
+// ========== Position 工具类 ==========
+
+.relative { position: relative; }
+.absolute { position: absolute; }
+.fixed { position: fixed; }
+.sticky { position: sticky; }
+
+// Overflow
+.overflow-auto { overflow: auto; }
+.overflow-hidden { overflow: hidden; }
+.overflow-scroll { overflow: scroll; }
+.overflow-x-auto { overflow-x: auto; }
+.overflow-y-auto { overflow-y: auto; }
+
+// ========== Text 工具类 ==========
+
+.text-left { text-align: left; }
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+
+// 字体大小
+.text-xs { font-size: 12px; }
+.text-sm { font-size: 13px; }
+.text-base { font-size: 14px; }
+.text-lg { font-size: 16px; }
+.text-xl { font-size: 18px; }
+.text-2xl { font-size: 20px; }
+.text-3xl { font-size: 24px; }
+.text-4xl { font-size: 32px; }
+
+// 字体粗细
+.font-normal { font-weight: 400; }
+.font-medium { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-bold { font-weight: 700; }
+
+// 文本颜色
+.text-primary { color: var(--el-text-color-primary); }
+.text-regular { color: var(--el-text-color-regular); }
+.text-secondary { color: var(--el-text-color-secondary); }
+.text-placeholder { color: var(--el-text-color-placeholder); }
+.text-success { color: var(--success-color); }
+.text-warning { color: var(--warning-color); }
+.text-danger { color: var(--danger-color); }
+.text-info { color: var(--info-color); }
+
+// 文本溢出
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// ========== Border 工具类 ==========
+
+.rounded { border-radius: var(--radius-sm); }    // 4px
+.rounded-md { border-radius: var(--radius-md); } // 8px
+.rounded-lg { border-radius: var(--radius-lg); } // 12px
+.rounded-full { border-radius: 9999px; }
+
+// ========== Shadow 工具类 ==========
+
+.shadow-sm { box-shadow: var(--shadow-sm); }
+.shadow-md { box-shadow: var(--shadow-md); }
+.shadow-lg { box-shadow: var(--shadow-lg); }
+.shadow-none { box-shadow: none; }
+
+// ========== Cursor 工具类 ==========
+
+.cursor-pointer { cursor: pointer; }
+.cursor-not-allowed { cursor: not-allowed; }
+
+// ========== 页面布局组件类 ==========
+
+// 页面容器（统一页面内边距）
+.page-container {
+  padding: 20px;
+}
+
+// 搜索表单容器（统一表单底部间距）
+.search-form {
+  margin-bottom: 20px;
+}
+
+// 卡片间距
+.card-margin {
+  margin-bottom: 20px;
+}
+
+.card-margin-sm {
+  margin-bottom: 16px;
+}
+
+// 卡片头部（带操作按钮的标准布局）
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+// ========== 统计展示组件类 ==========
+
+// 统计项容器
+.stat-item {
+  text-align: center;
+  padding: 10px 0;
+
+  .stat-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+
+  .stat-value {
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--text-primary);
+
+    // 状态变体
+    &.success { color: var(--success-color); }
+    &.warning { color: var(--warning-color); }
+    &.danger { color: var(--danger-color); }
+    &.info { color: var(--info-color); }
+    &.primary { color: var(--primary-color); }
+  }
+}
+
+// 统计网格（4列）
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+// ========== 状态指示器组件类 ==========
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+
+    &.online { background-color: var(--success-color); }
+    &.offline { background-color: var(--info-color); }
+    &.warning { background-color: var(--warning-color); }
+    &.error { background-color: var(--danger-color); }
+  }
+}
+
+// ========== 表格相关组件类 ==========
+
+// 表格操作按钮组
+.table-actions {
+  display: flex;
+  gap: 8px;
+}
+
+// ========== 连接选择器组件类 ==========
+
+.connection-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+
+  .connection-name {
+    font-weight: 500;
+  }
+
+  .connection-info {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-left: 8px;
+  }
+}
+
+// ========== WebSocket状态指示 ==========
+
+.ws-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background-color: var(--bg-light);
+  border-radius: 4px;
+
+  .connected { color: var(--success-color); }
+  .disconnected { color: var(--danger-color); }
+  
+  .last-update {
+    margin-left: auto;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+}
+
+// ========== 指标卡片组件类 ==========
+
+.metric-card {
+  text-align: center;
+  transition: all 0.3s;
+
+  &:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .metric-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+
+  .metric-value {
+    font-size: 32px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .metric-unit {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+  }
+
+  // 关键指标变体
+  &.critical {
+    background: linear-gradient(135deg, #fff5f5 0%, #fff 100%);
+    border-left: 3px solid var(--danger-color);
+  }
+}
+
+// ========== 效率评分组件类 ==========
+
+.efficiency-score {
+  text-align: center;
+
+  .score-label {
+    font-size: 14px;
+    color: var(--text-regular);
+    margin-bottom: 8px;
+  }
+
+  .score-value {
+    font-size: 48px;
+    font-weight: bold;
+
+    &.score-A { color: #67c23a; }
+    &.score-B { color: #409eff; }
+    &.score-C { color: #e6a23c; }
+    &.score-D { color: #f56c6c; }
+    &.score-E { color: #909399; }
+  }
+}
+
+// ========== 响应式工具类 ==========
+
+// 隐藏类
+.hide { display: none !important; }
+
+// 响应式断点
+@media (max-width: 768px) {
+  .hide-on-mobile { display: none !important; }
+  
+  .page-container {
+    padding: 12px;
+  }
+  
+  .search-form {
+    margin-bottom: 12px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .metric-card .metric-value {
+    font-size: 24px;
+  }
+}
+
+@media (min-width: 769px) {
+  .hide-on-desktop { display: none !important; }
+}
+
+@media (max-width: 480px) {
+  .hide-on-xs { display: none !important; }
+  
+  .page-container {
+    padding: 8px;
+  }
+}
+
+// ========== 过渡动画工具类 ==========
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.slide-enter-active,
+.slide-leave-active {
+  transition: transform 0.3s ease;
+}
+
+.slide-enter-from {
+  transform: translateX(-100%);
+}
+
+.slide-leave-to {
+  transform: translateX(100%);
+}
+
+// ========== 批量操作工具栏 ==========
+
+.batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+
+  span {
+    color: var(--el-text-color-regular);
+    font-size: 14px;
+  }
+}
+
+// ========== 效率评分工具类 ==========
+
+.efficiency-score {
+  text-align: center;
+
+  .score-label {
+    font-size: 14px;
+    color: var(--text-regular);
+    margin-bottom: 8px;
+  }
+
+  .score-value {
+    font-size: 48px;
+    font-weight: bold;
+
+    &.score-A { color: var(--success-color); }
+    &.score-B { color: var(--primary-color); }
+    &.score-C { color: var(--warning-color); }
+    &.score-D { color: var(--danger-color); }
+    &.score-E { color: var(--info-color); }
+  }
+}
+
+// ========== 分布图表工具类 ==========
+
+.distribution-chart {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  height: 200px;
+  padding: 20px 10px 0;
+  gap: 4px;
+}
+
+.bar-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+
+.bar-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  width: 100%;
+  padding: 0 2px;
+}
+
+.bar {
+  background: linear-gradient(180deg, #79bbff 0%, var(--primary-color) 100%);
+  border-radius: 4px 4px 0 0;
+  min-height: 0;
+  position: relative;
+  transition: all 0.3s ease;
+
+  &.bar-active {
+    cursor: pointer;
+    &:hover {
+      background: linear-gradient(180deg, #a0cfff 0%, #79bbff 100%);
+      transform: scaleX(1.1);
+    }
+  }
+}
+
+.bar-value {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary-color);
+  white-space: nowrap;
+}
+
+.bar-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 8px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.distribution-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.distribution-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 200px;
+  color: var(--primary-color);
+  font-size: 32px;
+}
+
+// ========== 统计行工具类 ==========
+
+.stats-row {
+  display: flex;
+  gap: 40px;
+
+  .stat-item {
+    text-align: center;
+  }
+
+  .stat-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+
+  .stat-value {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--primary-color);
+  }
+}
+
+// ========== JSON查看器工具类 ==========
+
+.json-viewer {
+  background: var(--bg-light);
+  padding: 16px;
+  border-radius: 4px;
+  overflow-x: auto;
+  max-height: 500px;
+}

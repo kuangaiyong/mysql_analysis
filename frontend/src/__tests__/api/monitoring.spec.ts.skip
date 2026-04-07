@@ -1,0 +1,127 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+
+vi.mock("@/api/client", () => ({
+  default: {
+    get: vi.fn(),
+    post: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn()
+  }
+}))
+
+import { monitoringApi } from "@/api/monitoring"
+import service from "@/api/client"
+
+describe("monitoring API", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  describe("getMetrics", () => {
+    it("should return performance metrics", async () => {
+      const mockData: any[] = [
+        { id: 1, qps: 100, tps: 50, connections: 10, buffer_pool_hit_rate: 99.5 }
+      ]
+      ;(service.get as any).mockResolvedValue({ data: mockData })
+
+      const result = await monitoringApi.getMetrics(1, { start_time: "2024-01-01", end_time: "2024-01-02" })
+
+      expect(service.get).toHaveBeenCalledWith("/monitoring/connections/1/metrics", {
+        params: { start_time: "2024-01-01", end_time: "2024-01-02" }
+      })
+      expect(result).toEqual(mockData)
+    })
+
+    it("should handle API error", async () => {
+      ;(service.get as any).mockRejectedValue(new Error("Failed to fetch metrics"))
+
+      await expect(monitoringApi.getMetrics(1)).rejects.toThrow("Failed to fetch metrics")
+    })
+  })
+
+  describe("startAutoCollection", () => {
+    it("should start auto collection", async () => {
+      ;(service.post as any).mockResolvedValue(undefined)
+
+      await monitoringApi.startAutoCollection(1, { interval: 5 })
+
+      expect(service.post).toHaveBeenCalledWith("/monitoring/connections/1/start-monitoring", { interval: 5 })
+    })
+
+    it("should start auto collection without config", async () => {
+      ;(service.post as any).mockResolvedValue(undefined)
+
+      await monitoringApi.startAutoCollection(1)
+
+      expect(service.post).toHaveBeenCalledWith("/monitoring/connections/1/start-monitoring", undefined)
+    })
+
+    it("should handle API error", async () => {
+      ;(service.post as any).mockRejectedValue(new Error("Start failed"))
+
+      await expect(monitoringApi.startAutoCollection(1)).rejects.toThrow("Start failed")
+    })
+  })
+
+  describe("stopAutoCollection", () => {
+    it("should stop auto collection", async () => {
+      ;(service.post as any).mockResolvedValue(undefined)
+
+      await monitoringApi.stopAutoCollection(1)
+
+      expect(service.post).toHaveBeenCalledWith("/monitoring/monitoring/1/stop")
+    })
+
+    it("should handle API error", async () => {
+      ;(service.post as any).mockRejectedValue(new Error("Stop failed"))
+
+      await expect(monitoringApi.stopAutoCollection(1)).rejects.toThrow("Stop failed")
+    })
+  })
+
+  describe("getRealtimeMetrics", () => {
+    it("should return realtime metrics", async () => {
+      const mockData: any = { qps: 100, tps: 50, connections: 10, buffer_pool_hit_rate: 99.5 }
+      ;(service.get as any).mockResolvedValue({ data: mockData })
+
+      const result = await monitoringApi.getRealtimeMetrics(1)
+
+      expect(service.get).toHaveBeenCalledWith("/monitoring/connections/1/metrics")
+      expect(result).toEqual(mockData)
+    })
+
+    it("should handle API error", async () => {
+      ;(service.get as any).mockRejectedValue(new Error("Failed to fetch realtime metrics"))
+
+      await expect(monitoringApi.getRealtimeMetrics(1)).rejects.toThrow("Failed to fetch realtime metrics")
+    })
+  })
+
+  describe("getMetricsHistory", () => {
+    it("should return metrics history", async () => {
+      const mockData: any = {
+        metrics: [
+          { timestamp: "2024-01-01T00:00:00Z", qps: 100, tps: 50 }
+        ]
+      }
+      ;(service.get as any).mockResolvedValue({ data: mockData })
+
+      const result = await monitoringApi.getMetricsHistory(1, { start_time: "2024-01-01", end_time: "2024-01-02" })
+
+      expect(service.get).toHaveBeenCalledWith("/monitoring/connections/1/metrics/history", {
+        params: { start_time: "2024-01-01", end_time: "2024-01-02" }
+      })
+      expect(result).toEqual(mockData)
+    })
+
+    it("should handle API error", async () => {
+      ;(service.get as any).mockRejectedValue(new Error("Failed to fetch history"))
+
+      await expect(monitoringApi.getMetricsHistory(1, { start_time: "2024-01-01", end_time: "2024-01-02" })).rejects.toThrow("Failed to fetch history")
+    })
+  })
+})

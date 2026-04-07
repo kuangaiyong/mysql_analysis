@@ -1,0 +1,47 @@
+# FastAPI 核心依赖
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# 数据库相关
+sqlalchemy>=2.0.25
+pymysql>=1.1.0
+cryptography>=41.0.0
+
+# Pydantic 相关
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+
+# 认证相关（预留）
+passlib[bcrypt]>=1.7.4
+python-jose[cryptography]>=3.3.0
+
+# 数据库迁移
+alembic>=1.13.1
+
+# Redis 和 Celery
+redis>=5.0.1
+celery>=5.3.6
+
+# 任务调度
+apscheduler>=3.10.4
+
+# 日志
+loguru>=0.7.2
+
+# 监控指标
+prometheus-client>=0.19.0
+
+# HTTP 客户端
+httpx>=0.26.0
+
+# 数据导出
+xlsxwriter>=3.1.9
+reportlab>=4.0.7
+
+# 测试相关
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0
+factory_boy>=3.3.0
+faker>=20.0.0

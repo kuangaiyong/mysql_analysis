@@ -1,0 +1,46 @@
+{
+  "connections": [
+    {
+      "name": "Production DB",
+      "host": "prod-db.example.com",
+      "port": 3306,
+      "username": "readonly_user",
+      "password": "encrypted_password",
+      "database_name": "production",
+      "is_active": true
+    },
+    {
+      "name": "Staging DB",
+      "host": "staging-db.example.com",
+      "port": 3306,
+      "username": "readonly_user",
+      "password": "encrypted_password",
+      "database_name": "staging",
+      "is_active": true
+    }
+  ],
+  "slowQueries": [
+    {
+      "sql": "SELECT * FROM orders WHERE status = 'pending' ORDER BY created_at DESC",
+      "execution_count": 1500,
+      "avg_query_time": 3.2,
+      "max_query_time": 8.5
+    },
+    {
+      "sql": "SELECT * FROM users WHERE last_login < DATE_SUB(NOW(), INTERVAL 30 DAY)",
+      "execution_count": 200,
+      "avg_query_time": 5.1,
+      "max_query_time": 15.2
+    }
+  ],
+  "alertRules": [
+    {
+      "name": "High Slow Query Rate",
+      "metric": "slow_query_rate",
+      "threshold": 10,
+      "comparison": ">",
+      "duration": "5m",
+      "is_enabled": true
+    }
+  ]
+}

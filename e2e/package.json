@@ -1,0 +1,26 @@
+{
+  "name": "mysql-analysis-e2e",
+  "version": "1.0.0",
+  "description": "E2E tests for MySQL Analysis System",
+  "private": true,
+  "scripts": {
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:debug": "playwright test --debug",
+    "e2e:headed": "playwright test --headed",
+    "e2e:report": "playwright show-report",
+    "e2e:chromium": "playwright test --project=chromium",
+    "e2e:firefox": "playwright test --project=firefox",
+    "e2e:webkit": "playwright test --project=webkit",
+    "e2e:smoke": "playwright test src/tests/smoke/",
+    "e2e:connections": "playwright test src/tests/connections/",
+    "e2e:monitoring": "playwright test src/tests/monitoring/",
+    "e2e:api": "playwright test src/tests/api/",
+    "e2e:install": "npm install && npx playwright install --with-deps"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  }
+}

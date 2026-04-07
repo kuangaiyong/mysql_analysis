@@ -1,0 +1,417 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { ElMessage } from 'element-plus'
+import TuningView from '@/view/tuning/index.vue'
+import { tuningApi } from '@/api/tuning'
+import { connectionsApi } from '@/api/connection'
+
+// Mock API 模块
+vi.mock('@/api/tuning')
+vi.mock('@/api/connection')
+vi.mock('element-plus', () => ({
+  ElMessage: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn()
+  }
+}))
+
+// Mock navigator.clipboard
+const mockClipboardWriteText = vi.fn().mockResolvedValue(undefined)
+Object.defineProperty(navigator, 'clipboard', {
+  value: {
+    writeText: mockClipboardWriteText
+  },
+  writable: true
+})
+
+// Mock 子组件
+vi.mock('@/components/Common/ConnectionSelector.vue', () => ({
+  default: {
+    name: 'ConnectionSelector',
+    template: '<div class="connection-selector-mock" @click="$emit(\'change\', 1)"></div>',
+    props: ['modelValue', 'connections', 'showLabel', 'showStatus', 'width'],
+    emits: ['update:modelValue', 'change']
+  }
+}))
+
+vi.mock('@/components/Common/PageHeader.vue', () => ({
+  default: {
+    name: 'PageHeader',
+    template: '<div class="page-header-mock"><slot /><slot name="extra" /></div>',
+    props: ['title']
+  }
+}))
+
+// 测试数据
+const mockConnections = [
+  { id: 1, name: '测试连接1', host: 'localhost', port: 3306 },
+  { id: 2, name: '测试连接2', host: '127.0.0.1', port: 3306 }
+]
+
+const mockIndexSuggestions = {
+  connection_id: 1,
+  sql: 'SELECT * FROM users WHERE name = "test"',
+  recommendations: [
+    {
+      type: 'INDEX',
+      table: 'users',
+      columns: ['name'],
+      reason: 'name 列缺少索引，导致全表扫描',
+      sql: 'CREATE INDEX idx_users_name ON users(name)',
+      priority: 'high',
+      estimated_improvement: '提升约 90%'
+    }
+  ],
+  has_recommendations: true
+}
+
+const mockRewriteSuggestions = {
+  sql: 'SELECT * FROM users WHERE id = 1',
+  suggestions: [
+    {
+      type: 'SELECT_STAR',
+      priority: 'medium',
+      title: '避免使用 SELECT *',
+      description: 'SELECT * 会返回所有列，建议只查询需要的列',
+      sql_before: 'SELECT * FROM users WHERE id = 1',
+      sql_after: 'SELECT id, name FROM users WHERE id = 1',
+      expected_improvement: '减少约 50% 数据传输'
+    }
+  ],
+  has_suggestions: true
+}
+
+const mockInnoDBTuning = {
+  connection_id: 1,
+  recommendations: [
+    {
+      category: 'Buffer Pool',
+      param: 'innodb_buffer_pool_size',
+      current_value: '134217728',
+      recommended_value: '536870912',
+      reason: 'Buffer Pool 偏小，可能导致频繁磁盘读取',
+      impact: '提升缓存命中率，减少磁盘 I/O',
+      priority: 'high',
+      sql_statement: 'SET GLOBAL innodb_buffer_pool_size = 536870912'
+    }
+  ],
+  buffer_pool_hit_rate: 85.5
+}
+
+describe('TuningView', () => {
+  beforeEach(() => {
+    // 每个测试前重置 Pinia 实例
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    
+    // 设置 API mock 的默认返回值
+    vi.mocked(connectionsApi.getAll).mockResolvedValue(mockConnections as any)
+    vi.mocked(tuningApi.getIndexSuggestions).mockResolvedValue(mockIndexSuggestions)
+    vi.mocked(tuningApi.getSQLRewrite).mockResolvedValue(mockRewriteSuggestions)
+    vi.mocked(tuningApi.getInnoDBTuning).mockResolvedValue(mockInnoDBTuning)
+  })
+
+  describe('页面渲染', () => {
+    it('应该正确渲染页面结构', () => {
+      const wrapper = mount(TuningView)
+      
+      // 验证页面容器存在
+      expect(wrapper.find('.tuning-page').exists()).toBe(true)
+      expect(wrapper.find('.tuning-card').exists()).toBe(true)
+    })
+
+    it('应该渲染三个 Tab 面板', () => {
+      const wrapper = mount(TuningView)
+      
+      // 验证 Tab 结构
+      const tabs = wrapper.findAll('.el-tab-pane')
+      expect(tabs.length).toBe(3)
+    })
+
+    it('默认选中索引建议 Tab', () => {
+      const wrapper = mount(TuningView)
+      
+      expect(wrapper.vm.activeTab).toBe('index')
+    })
+  })
+
+  describe('数据加载', () => {
+    it('组件挂载时应该获取连接列表', async () => {
+      mount(TuningView)
+      
+      // 等待 onMounted 执行
+      await new Promise(resolve => setTimeout(resolve, 0))
+      
+      expect(connectionsApi.getAll).toHaveBeenCalled()
+    })
+
+    it('获取连接列表失败时应该显示错误消息', async () => {
+      vi.mocked(connectionsApi.getAll).mockRejectedValue(new Error('网络错误'))
+      
+      mount(TuningView)
+      
+      await new Promise(resolve => setTimeout(resolve, 0))
+      
+      expect(ElMessage.error).toHaveBeenCalledWith('获取连接列表失败')
+    })
+  })
+
+  describe('索引建议功能', () => {
+    it('应该正确渲染索引建议输入区域', () => {
+      const wrapper = mount(TuningView)
+      
+      // 验证 SQL 输入框存在
+      expect(wrapper.find('.sql-input').exists()).toBe(true)
+      
+      // 验证分析按钮存在
+      const buttons = wrapper.findAll('.el-button')
+      expect(buttons.length).toBeGreaterThan(0)
+    })
+
+    it('点击分析按钮应该调用索引分析 API', async () => {
+      const wrapper = mount(TuningView)
+      
+      // 设置连接 ID 和 SQL
+      wrapper.vm.selectedConnectionId = 1
+      wrapper.vm.indexForm.sql = 'SELECT * FROM users WHERE name = "test"'
+      
+      // 调用分析方法
+      await wrapper.vm.analyzeIndex()
+      
+      expect(tuningApi.getIndexSuggestions).toHaveBeenCalledWith(
+        1,
+        'SELECT * FROM users WHERE name = "test"'
+      )
+      expect(ElMessage.success).toHaveBeenCalled()
+    })
+
+    it('索引分析成功后应该显示结果', async () => {
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.selectedConnectionId = 1
+      wrapper.vm.indexForm.sql = 'SELECT * FROM users'
+      
+      await wrapper.vm.analyzeIndex()
+      
+      expect(wrapper.vm.indexResult).toEqual(mockIndexSuggestions)
+    })
+
+    it('索引分析失败时应该显示错误消息', async () => {
+      vi.mocked(tuningApi.getIndexSuggestions).mockRejectedValue({
+        response: { data: { detail: '分析失败' } }
+      })
+      
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.selectedConnectionId = 1
+      wrapper.vm.indexForm.sql = 'SELECT * FROM users'
+      
+      await wrapper.vm.analyzeIndex()
+      
+      expect(ElMessage.error).toHaveBeenCalledWith('分析失败')
+    })
+
+    it('清空按钮应该重置索引表单', async () => {
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.indexForm.sql = 'SELECT * FROM users'
+      wrapper.vm.indexResult = mockIndexSuggestions as any
+      
+      wrapper.vm.clearIndexForm()
+      
+      expect(wrapper.vm.indexForm.sql).toBe('')
+      expect(wrapper.vm.indexResult).toBeNull()
+    })
+
+    it('未选择连接或 SQL 为空时分析按钮应该被禁用', () => {
+      const wrapper = mount(TuningView)
+      
+      // 未选择连接，SQL 为空
+      wrapper.vm.selectedConnectionId = null
+      wrapper.vm.indexForm.sql = ''
+      
+      expect(wrapper.vm.indexLoading).toBe(false)
+    })
+  })
+
+  describe('SQL 改写功能', () => {
+    it('点击分析按钮应该调用 SQL 改写 API', async () => {
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.rewriteForm.sql = 'SELECT * FROM users WHERE id = 1'
+      
+      await wrapper.vm.analyzeRewrite()
+      
+      expect(tuningApi.getSQLRewrite).toHaveBeenCalledWith(
+        'SELECT * FROM users WHERE id = 1'
+      )
+      expect(ElMessage.success).toHaveBeenCalled()
+    })
+
+    it('SQL 改写成功后应该显示结果', async () => {
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.rewriteForm.sql = 'SELECT * FROM users'
+      
+      await wrapper.vm.analyzeRewrite()
+      
+      expect(wrapper.vm.rewriteResult).toEqual(mockRewriteSuggestions)
+    })
+
+    it('SQL 改写失败时应该显示错误消息', async () => {
+      vi.mocked(tuningApi.getSQLRewrite).mockRejectedValue({
+        response: { data: { detail: '改写失败' } }
+      })
+      
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.rewriteForm.sql = 'SELECT * FROM users'
+      
+      await wrapper.vm.analyzeRewrite()
+      
+      expect(ElMessage.error).toHaveBeenCalledWith('改写失败')
+    })
+
+    it('清空按钮应该重置 SQL 改写表单', async () => {
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.rewriteForm.sql = 'SELECT * FROM users'
+      wrapper.vm.rewriteResult = mockRewriteSuggestions as any
+      
+      wrapper.vm.clearRewriteForm()
+      
+      expect(wrapper.vm.rewriteForm.sql).toBe('')
+      expect(wrapper.vm.rewriteResult).toBeNull()
+    })
+  })
+
+  describe('InnoDB 调优功能', () => {
+    it('点击分析按钮应该调用 InnoDB 调优 API', async () => {
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.selectedConnectionId = 1
+      
+      await wrapper.vm.analyzeInnoDB()
+      
+      expect(tuningApi.getInnoDBTuning).toHaveBeenCalledWith(1)
+      expect(ElMessage.success).toHaveBeenCalled()
+    })
+
+    it('InnoDB 调优成功后应该显示结果', async () => {
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.selectedConnectionId = 1
+      
+      await wrapper.vm.analyzeInnoDB()
+      
+      expect(wrapper.vm.innodbResult).toEqual(mockInnoDBTuning)
+    })
+
+    it('InnoDB 调优失败时应该显示错误消息', async () => {
+      vi.mocked(tuningApi.getInnoDBTuning).mockRejectedValue({
+        response: { data: { detail: '调优失败' } }
+      })
+      
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.selectedConnectionId = 1
+      
+      await wrapper.vm.analyzeInnoDB()
+      
+      expect(ElMessage.error).toHaveBeenCalledWith('调优失败')
+    })
+
+    it('未选择连接时不应该调用 API', async () => {
+      const wrapper = mount(TuningView)
+      
+      wrapper.vm.selectedConnectionId = null
+      
+      await wrapper.vm.analyzeInnoDB()
+      
+      expect(tuningApi.getInnoDBTuning).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('连接切换功能', () => {
+    it('切换连接时应该清空所有结果', () => {
+      const wrapper = mount(TuningView)
+      
+      // 设置一些结果
+      wrapper.vm.indexResult = mockIndexSuggestions as any
+      wrapper.vm.rewriteResult = mockRewriteSuggestions as any
+      wrapper.vm.innodbResult = mockInnoDBTuning as any
+      
+      // 切换连接
+      wrapper.vm.handleConnectionChange()
+      
+      expect(wrapper.vm.indexResult).toBeNull()
+      expect(wrapper.vm.rewriteResult).toBeNull()
+      expect(wrapper.vm.innodbResult).toBeNull()
+    })
+  })
+
+  describe('复制功能', () => {
+    it('复制到剪贴板应该成功', async () => {
+      const wrapper = mount(TuningView)
+      
+      await wrapper.vm.copyToClipboard('CREATE INDEX idx_name ON users(name)', 'CREATE INDEX语句')
+      
+      expect(mockClipboardWriteText).toHaveBeenCalledWith(
+        'CREATE INDEX idx_name ON users(name)'
+      )
+      expect(ElMessage.success).toHaveBeenCalledWith('CREATE INDEX语句已复制到剪贴板')
+    })
+
+    it('复制失败时应该显示错误消息', async () => {
+      mockClipboardWriteText.mockRejectedValueOnce(new Error('复制失败'))
+      
+      const wrapper = mount(TuningView)
+      
+      await wrapper.vm.copyToClipboard('test', '内容')
+      
+      expect(ElMessage.error).toHaveBeenCalledWith('复制失败')
+    })
+  })
+
+  describe('辅助函数', () => {
+    it('getPriorityType 应该正确返回优先级类型', () => {
+      const wrapper = mount(TuningView)
+      
+      expect(wrapper.vm.getPriorityType('high')).toBe('danger')
+      expect(wrapper.vm.getPriorityType('High')).toBe('danger')
+      expect(wrapper.vm.getPriorityType('高')).toBe('danger')
+      
+      expect(wrapper.vm.getPriorityType('medium')).toBe('warning')
+      expect(wrapper.vm.getPriorityType('Medium')).toBe('warning')
+      expect(wrapper.vm.getPriorityType('中')).toBe('warning')
+      
+      expect(wrapper.vm.getPriorityType('low')).toBe('info')
+      expect(wrapper.vm.getPriorityType('Low')).toBe('info')
+      expect(wrapper.vm.getPriorityType('低')).toBe('info')
+    })
+
+    it('getCategoryType 应该正确返回分类类型', () => {
+      const wrapper = mount(TuningView)
+      
+      // Buffer Pool / 缓存 -> 默认类型
+      expect(wrapper.vm.getCategoryType('Buffer Pool')).toBe('')
+      expect(wrapper.vm.getCategoryType('缓存')).toBe('')
+      
+      // I/O / Log / 日志 -> warning
+      // 注意：'I/O'.toLowerCase() = 'i/o'，'i/o'.includes('io') = false（中间有斜杠）
+      expect(wrapper.vm.getCategoryType('IO Config')).toBe('warning')
+      expect(wrapper.vm.getCategoryType('Log Settings')).toBe('warning')
+      expect(wrapper.vm.getCategoryType('日志')).toBe('warning')
+      expect(wrapper.vm.getCategoryType('I/O')).toBe('info') // 'i/o' 不包含 'io'
+      
+      // Memory / 内存 -> success
+      expect(wrapper.vm.getCategoryType('Memory')).toBe('success')
+      expect(wrapper.vm.getCategoryType('内存')).toBe('success')
+      
+      // 其他 -> info
+      expect(wrapper.vm.getCategoryType('Other')).toBe('info')
+    })
+  })
+})

@@ -1,0 +1,164 @@
+- generic [ref=e3]:
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7] [cursor=pointer]:
+        - img [ref=e9]
+        - generic [ref=e11]:
+          - heading "MySQL诊断" [level=1] [ref=e12]
+          - paragraph [ref=e13]: 性能监控与优化
+      - navigation "面包屑" [ref=e15]:
+        - generic [ref=e16]:
+          - link "首页" [ref=e17]
+          - text: /
+        - link "仪表盘" [ref=e19]
+    - generic [ref=e20]:
+      - generic [ref=e21]:
+        - button [ref=e22] [cursor=pointer]:
+          - img [ref=e25]
+        - button [ref=e27] [cursor=pointer]:
+          - img [ref=e30]
+      - button "testuser" [ref=e33] [cursor=pointer]:
+        - img [ref=e36]
+        - generic [ref=e38]: testuser
+  - generic [ref=e39]:
+    - complementary [ref=e40]:
+      - menubar [ref=e42]:
+        - menuitem "监控分析" [expanded] [ref=e43]:
+          - generic [ref=e44] [cursor=pointer]:
+            - img [ref=e46]
+            - generic [ref=e48]: 监控分析
+            - img [ref=e50]
+          - menu [ref=e52]:
+            - menuitem "仪表盘" [ref=e53] [cursor=pointer]:
+              - img [ref=e55]
+              - text: 仪表盘
+            - menuitem "性能监控" [ref=e57] [cursor=pointer]:
+              - img [ref=e59]
+              - text: 性能监控
+        - menuitem "诊断工具" [ref=e61]:
+          - generic [ref=e62] [cursor=pointer]:
+            - img [ref=e64]
+            - generic [ref=e66]: 诊断工具
+            - img [ref=e68]
+        - menuitem "索引管理" [ref=e70]:
+          - generic [ref=e71] [cursor=pointer]:
+            - img [ref=e73]
+            - generic [ref=e75]: 索引管理
+            - img [ref=e77]
+        - menuitem "表结构" [ref=e79]:
+          - generic [ref=e80] [cursor=pointer]:
+            - img [ref=e82]
+            - generic [ref=e84]: 表结构
+            - img [ref=e86]
+        - menuitem "系统配置" [ref=e88]:
+          - generic [ref=e89] [cursor=pointer]:
+            - img [ref=e91]
+            - generic [ref=e93]: 系统配置
+            - img [ref=e95]
+        - menuitem "告警报告" [ref=e97]:
+          - generic [ref=e98] [cursor=pointer]:
+            - img [ref=e100]
+            - generic [ref=e104]: 告警报告
+            - img [ref=e106]
+    - main [ref=e108]:
+      - generic [ref=e116] [cursor=pointer]: 仪表盘
+      - generic [ref=e118]:
+        - generic [ref=e123]:
+          - generic [ref=e124]: 当前连接：
+          - generic [ref=e126] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e128]
+              - generic [ref=e129]: demo
+            - img [ref=e132]
+          - generic [ref=e135]: 已连接
+        - generic [ref=e138]:
+          - generic [ref=e140]:
+            - img [ref=e142]
+            - generic [ref=e145]: 配置健康
+            - button "开始分析" [ref=e146] [cursor=pointer]:
+              - img [ref=e148]
+              - generic [ref=e150]: 开始分析
+          - generic [ref=e152]:
+            - generic [ref=e153]:
+              - generic [ref=e155]:
+                - generic [ref=e156]: "0"
+                - generic [ref=e157]: 健康分数
+              - generic [ref=e159]:
+                - generic [ref=e160] [cursor=pointer]:
+                  - generic [ref=e161]: "3"
+                  - generic [ref=e162]: 严重问题
+                - generic [ref=e163] [cursor=pointer]:
+                  - generic [ref=e164]: "2"
+                  - generic [ref=e165]: 警告
+                - generic [ref=e166] [cursor=pointer]:
+                  - generic [ref=e167]: "6"
+                  - generic [ref=e168]: 信息
+                - generic [ref=e169] [cursor=pointer]:
+                  - generic [ref=e170]: "11"
+                  - generic [ref=e171]: 总计
+            - separator [ref=e173]
+            - generic [ref=e174]:
+              - generic [ref=e175]: Top 3 配置问题
+              - generic [ref=e177]:
+                - table [ref=e179]:
+                  - rowgroup [ref=e186]:
+                    - row "参数名 当前值 推荐值 严重程度 操作" [ref=e187]:
+                      - columnheader "参数名" [ref=e188]:
+                        - generic [ref=e189]: 参数名
+                      - columnheader "当前值" [ref=e190]:
+                        - generic [ref=e191]: 当前值
+                      - columnheader "推荐值" [ref=e192]:
+                        - generic [ref=e193]: 推荐值
+                      - columnheader "严重程度" [ref=e194]:
+                        - generic [ref=e195]: 严重程度
+                      - columnheader "操作" [ref=e196]:
+                        - generic [ref=e197]: 操作
+                - table [ref=e202]:
+                  - rowgroup [ref=e209]:
+                    - row "innodb_flush_log_at_trx_commit 1 1 (最高持久性) INFO 查看详情" [ref=e210]:
+                      - cell "innodb_flush_log_at_trx_commit" [ref=e211]:
+                        - generic [ref=e212]: innodb_flush_log_at_trx_commit
+                      - cell "1" [ref=e213]:
+                        - generic [ref=e214]: "1"
+                      - cell "1 (最高持久性)" [ref=e215]:
+                        - generic [ref=e216]: 1 (最高持久性)
+                      - cell "INFO" [ref=e217]:
+                        - generic [ref=e220]: INFO
+                      - cell "查看详情" [ref=e221]:
+                        - button "查看详情" [ref=e223] [cursor=pointer]:
+                          - generic [ref=e224]: 查看详情
+                    - row "innodb_file_per_table ON 1 CRIT 查看详情" [ref=e225]:
+                      - cell "innodb_file_per_table" [ref=e226]:
+                        - generic [ref=e227]: innodb_file_per_table
+                      - cell "ON" [ref=e228]:
+                        - generic [ref=e229]: "ON"
+                      - cell "1" [ref=e230]:
+                        - generic [ref=e231]: "1"
+                      - cell "CRIT" [ref=e232]:
+                        - generic [ref=e235]: CRIT
+                      - cell "查看详情" [ref=e236]:
+                        - button "查看详情" [ref=e238] [cursor=pointer]:
+                          - generic [ref=e239]: 查看详情
+                    - row "innodb_flush_method fsync O_DIRECT WARN 查看详情" [ref=e240]:
+                      - cell "innodb_flush_method" [ref=e241]:
+                        - generic [ref=e242]: innodb_flush_method
+                      - cell "fsync" [ref=e243]:
+                        - generic [ref=e244]: fsync
+                      - cell "O_DIRECT" [ref=e245]:
+                        - generic [ref=e246]: O_DIRECT
+                      - cell "WARN" [ref=e247]:
+                        - generic [ref=e250]: WARN
+                      - cell "查看详情" [ref=e251]:
+                        - button "查看详情" [ref=e253] [cursor=pointer]:
+                          - generic [ref=e254]: 查看详情
+            - separator [ref=e255]
+            - generic [ref=e256]:
+              - text: 快速操作
+              - generic [ref=e257]:
+                - button "查看详细报告" [ref=e259] [cursor=pointer]:
+                  - img [ref=e261]
+                  - generic [ref=e263]: 查看详细报告
+                - button "导出报告" [ref=e265] [cursor=pointer]:
+                  - img [ref=e267]
+                  - generic [ref=e269]: 导出报告
+      - generic [ref=e271]: © 2026 MySQL性能诊断与优化系统|版本 v2.0.0

@@ -1,0 +1,78 @@
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+logs/
+
+# 数据库文件
+*.db
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+.pytest_cache/
+coverage.xml
+coverage.json
+.coverage
+
+# 覆盖率报告
+htmlcov/
+
+# Node.js
+node_modules/
+
+# 前端构建产物
+frontend/dist/
+frontend/html/
+
+# E2E测试产物
+e2e/test-results/
+e2e/playwright-report/
+frontend/playwright-report/
+frontend/test-results/
+frontend/coverage/
+frontend/tsconfig.tsbuildinfo
+
+# 覆盖报告目录
+reports/
+qa_reports/
+
+# 测试截图（根目录散落的截图）
+tc-*.png
+slow-query-*.png
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+.env.test
+backend/.env.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# sqlparse内嵌副本（应通过pip安装）
+backend/sqlparse/
+backend/sqlparse-*/
+backend/bin/
+
+# 测试报告（根目录散落的报告）
+test-*.md
+test-final-report.md
+test-pass-report.md
+测试报告-*.md
