@@ -4,10 +4,12 @@ AI 上下文构建器
 从 MySQL 实例收集数据，构建 AI 诊断所需的上下文
 """
 
+import asyncio
 import json
 import logging
 import re
 from enum import Enum
+from functools import partial
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from decimal import Decimal
@@ -72,6 +74,18 @@ class AIContextBuilder:
             )
         return self._connector
     
+    async def _async_query(self, query: str, params: Optional[tuple] = None) -> List[Dict]:
+        """
+        在线程池中执行同步 MySQL 查询，避免阻塞事件循环
+
+        这是对 connector.execute_query 的异步包装。
+        """
+        connector = self._get_connector()
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, partial(connector.execute_query, query, params)
+        )
+    
     async def get_connection_info(self) -> Dict[str, Any]:
         """获取连接基本信息"""
         if self._connection_info is None:
@@ -88,11 +102,10 @@ class AIContextBuilder:
     async def get_performance_metrics(self) -> Dict[str, Any]:
         """获取性能指标（简化版）"""
         try:
-            connector = self._get_connector()
             
             # 获取基础状态指标
             status_query = "SHOW GLOBAL STATUS WHERE Variable_name IN ('Queries', 'Questions', 'Connections', 'Bytes_received', 'Bytes_sent', 'Innodb_buffer_pool_read_requests', 'Innodb_buffer_pool_reads')"
-            status_result = connector.execute_query(status_query)
+            status_result = await self._async_query(status_query)
             status = {row['Variable_name']: int(row['Value']) for row in status_result}
             
             # 计算简化的性能指标
@@ -122,7 +135,6 @@ class AIContextBuilder:
     async def get_config_issues(self) -> List[Dict[str, Any]]:
         """获取配置信息（扩展版，覆盖 45+ 关键参数）"""
         try:
-            connector = self._get_connector()
 
             # 分类采集关键配置参数
             variables_list = [
@@ -157,7 +169,7 @@ class AIContextBuilder:
             ]
             placeholders = ', '.join(f"'{v}'" for v in variables_list)
             variables_query = f"SHOW VARIABLES WHERE Variable_name IN ({placeholders})"
-            variables = connector.execute_query(variables_query)
+            variables = await self._async_query(variables_query)
 
             config = [
                 {
@@ -176,11 +188,10 @@ class AIContextBuilder:
     async def get_slow_queries(self, limit: int = 20) -> List[Dict[str, Any]]:
         """获取慢查询（从 performance_schema）"""
         try:
-            connector = self._get_connector()
             
             # 检查 performance_schema 是否启用
             check_query = "SELECT COUNT(*) as count FROM performance_schema.setup_instruments WHERE ENABLED='YES'"
-            result = connector.execute_query(check_query)
+            result = await self._async_query(check_query)
             
             if not result or result[0]['count'] == 0:
                 return []
@@ -201,7 +212,7 @@ class AIContextBuilder:
                 LIMIT {limit}
             """
             
-            slow_queries = connector.execute_query(query)
+            slow_queries = await self._async_query(query)
             
             # 简化返回数据
             return [
@@ -222,7 +233,6 @@ class AIContextBuilder:
     async def get_wait_events_summary(self) -> Dict[str, Any]:
         """获取等待事件摘要（简化版）"""
         try:
-            connector = self._get_connector()
             
             # 查询等待事件
             query = """
@@ -236,7 +246,7 @@ class AIContextBuilder:
                 LIMIT 10
             """
             
-            events = connector.execute_query(query)
+            events = await self._async_query(query)
             
             return {
                 "bottleneck_type": "待分析",
@@ -257,11 +267,10 @@ class AIContextBuilder:
     async def get_explain(self, sql: str) -> Dict[str, Any]:
         """获取 SQL 执行计划"""
         try:
-            connector = self._get_connector()
             
             # 执行 EXPLAIN
             explain_query = f"EXPLAIN FORMAT=JSON {sql}"
-            result = connector.execute_query(explain_query)
+            result = await self._async_query(explain_query)
             
             if result and len(result) > 0:
                 # 解析 JSON 格式的 EXPLAIN 结果
@@ -273,7 +282,7 @@ class AIContextBuilder:
             
             # 回退到传统格式
             explain_query = f"EXPLAIN {sql}"
-            return {"traditional": connector.execute_query(explain_query)}
+            return {"traditional": await self._async_query(explain_query)}
         except Exception as e:
             logger.error(f"获取 EXPLAIN 失败: {e}")
             return {"error": str(e)}
@@ -281,7 +290,6 @@ class AIContextBuilder:
     async def get_table_structure(self, table_name: str) -> Dict[str, Any]:
         """获取表结构"""
         try:
-            connector = self._get_connector()
 
             # 只查询关键字段，减少 token 消耗
             query = """
@@ -295,7 +303,7 @@ class AIContextBuilder:
                 WHERE TABLE_NAME = %s AND TABLE_SCHEMA = DATABASE()
                 ORDER BY ORDINAL_POSITION
             """
-            columns = connector.execute_query(query, (table_name,))
+            columns = await self._async_query(query, (table_name,))
 
             return {
                 "table_name": table_name,
@@ -308,9 +316,8 @@ class AIContextBuilder:
     async def get_table_indexes(self, table_name: str) -> List[Dict[str, Any]]:
         """获取表索引"""
         try:
-            connector = self._get_connector()
             query = f"SHOW INDEX FROM `{table_name}`"
-            rows = connector.execute_query(query)
+            rows = await self._async_query(query)
             # 只保留关键字段，减少 token 消耗
             return [
                 {
@@ -328,7 +335,6 @@ class AIContextBuilder:
     async def get_table_stats(self, table_name: str) -> Dict[str, Any]:
         """获取表统计信息"""
         try:
-            connector = self._get_connector()
             query = f"""
                 SELECT 
                     TABLE_ROWS,
@@ -339,7 +345,7 @@ class AIContextBuilder:
                 FROM information_schema.TABLES
                 WHERE TABLE_NAME = %s AND TABLE_SCHEMA = DATABASE()
             """
-            result = connector.execute_query(query, (table_name,))
+            result = await self._async_query(query, (table_name,))
             return result[0] if result else {}
         except Exception as e:
             logger.error(f"获取表统计失败: {e}")
@@ -348,8 +354,7 @@ class AIContextBuilder:
     async def get_innodb_status(self) -> Dict[str, Any]:
         """获取 InnoDB 引擎状态（解析 SHOW ENGINE INNODB STATUS）"""
         try:
-            connector = self._get_connector()
-            result = connector.execute_query("SHOW ENGINE INNODB STATUS")
+            result = await self._async_query("SHOW ENGINE INNODB STATUS")
             if not result:
                 return {"error": "无法获取 InnoDB 状态"}
 
@@ -404,7 +409,6 @@ class AIContextBuilder:
     async def get_active_sessions(self) -> Dict[str, Any]:
         """获取活跃会话信息"""
         try:
-            connector = self._get_connector()
 
             # 活跃会话（排除 Sleep，运行超过 1 秒）
             query = """
@@ -415,7 +419,7 @@ class AIContextBuilder:
                 ORDER BY TIME DESC
                 LIMIT 20
             """
-            active = connector.execute_query(query)
+            active = await self._async_query(query)
 
             # 总连接数统计
             count_query = """
@@ -425,7 +429,7 @@ class AIContextBuilder:
                     SUM(CASE WHEN COMMAND != 'Sleep' THEN 1 ELSE 0 END) as active
                 FROM information_schema.PROCESSLIST
             """
-            counts = connector.execute_query(count_query)
+            counts = await self._async_query(count_query)
             count_info = counts[0] if counts else {}
 
             return {
@@ -453,7 +457,6 @@ class AIContextBuilder:
     async def get_database_sizes(self) -> List[Dict[str, Any]]:
         """获取各数据库/表大小统计"""
         try:
-            connector = self._get_connector()
 
             query = """
                 SELECT
@@ -469,7 +472,7 @@ class AIContextBuilder:
                 ORDER BY SUM(DATA_LENGTH + INDEX_LENGTH) DESC
                 LIMIT 20
             """
-            sizes = connector.execute_query(query)
+            sizes = await self._async_query(query)
 
             # 碎片率高的表
             frag_query = """
@@ -484,7 +487,7 @@ class AIContextBuilder:
                 ORDER BY DATA_FREE DESC
                 LIMIT 10
             """
-            fragmented = connector.execute_query(frag_query)
+            fragmented = await self._async_query(frag_query)
 
             return {
                 "databases": sizes,
@@ -497,14 +500,13 @@ class AIContextBuilder:
     async def get_replication_status(self) -> Dict[str, Any]:
         """获取复制状态"""
         try:
-            connector = self._get_connector()
 
             # 尝试 MySQL 8.0.22+ 语法
             try:
-                result = connector.execute_query("SHOW REPLICA STATUS")
+                result = await self._async_query("SHOW REPLICA STATUS")
             except Exception:
                 try:
-                    result = connector.execute_query("SHOW SLAVE STATUS")
+                    result = await self._async_query("SHOW SLAVE STATUS")
                 except Exception:
                     return {"is_replica": False}
 
@@ -530,7 +532,6 @@ class AIContextBuilder:
     async def get_memory_usage(self) -> Dict[str, Any]:
         """获取内存使用分布（performance_schema）"""
         try:
-            connector = self._get_connector()
 
             query = """
                 SELECT
@@ -542,7 +543,7 @@ class AIContextBuilder:
                 ORDER BY CURRENT_NUMBER_OF_BYTES_USED DESC
                 LIMIT 10
             """
-            result = connector.execute_query(query)
+            result = await self._async_query(query)
 
             total_bytes = sum(r.get("current_bytes", 0) for r in result)
             return {
@@ -719,3 +720,489 @@ class AIContextBuilder:
             except:
                 pass
             self._connector = None
+
+
+# ==================== 规则引擎预分析 ====================
+
+class RuleEnginePreAnalyzer:
+    """
+    规则引擎预分析器
+
+    在将采集数据发送给 LLM 之前，使用确定性规则对数据进行预检测，
+    标记异常指标为 [!ANOMALY]，帮助 LLM 聚焦关键问题，减少遗漏。
+    """
+
+    @staticmethod
+    def analyze_diagnostics(context: Dict[str, Any]) -> str:
+        """
+        对诊断上下文执行规则引擎预分析
+
+        Args:
+            context: build_full_context_async() 返回的完整上下文
+
+        Returns:
+            预分析结果文本（含 [!ANOMALY] 标记），可直接嵌入 prompt
+        """
+        findings: List[str] = []
+        metrics = context.get("performance_metrics", {})
+        config_list = context.get("config_issues", [])
+        slow_queries = context.get("slow_queries", [])
+        wait_events = context.get("wait_events", {})
+        innodb = context.get("innodb_status", {})
+        sessions = context.get("active_sessions", {})
+        db_sizes = context.get("database_sizes", {})
+        replication = context.get("replication_status", {})
+        memory = context.get("memory_usage", {})
+
+        # 将 config 列表转为字典方便查找
+        config = {}
+        for item in config_list:
+            name = item.get("name", "")
+            value = item.get("value", "")
+            config[name] = value
+
+        # ---------- 性能指标规则 ----------
+
+        # R1: Buffer Pool 命中率
+        hit_rate = metrics.get("buffer_pool_hit_rate", None)
+        if hit_rate is not None and hit_rate < 99.0:
+            level = "critical" if hit_rate < 95.0 else "warning"
+            findings.append(
+                f"[!ANOMALY][{level}] Buffer Pool 命中率偏低: {hit_rate}%"
+                f"（建议 >= 99%，当前差 {round(99 - hit_rate, 2)} 个百分点）"
+            )
+
+        # ---------- 配置规则 ----------
+
+        # R2: innodb_buffer_pool_size 过小
+        bp_size_str = config.get("innodb_buffer_pool_size", "0")
+        try:
+            bp_size = int(bp_size_str)
+            bp_size_mb = bp_size / 1024 / 1024
+            if bp_size_mb < 256:
+                findings.append(
+                    f"[!ANOMALY][critical] innodb_buffer_pool_size = {bp_size_mb:.0f}MB，"
+                    "严重偏小（建议为物理内存的 60-80%）"
+                )
+            elif bp_size_mb < 1024:
+                findings.append(
+                    f"[!ANOMALY][warning] innodb_buffer_pool_size = {bp_size_mb:.0f}MB，"
+                    "偏小（建议为物理内存的 60-80%）"
+                )
+        except (ValueError, TypeError):
+            pass
+
+        # R3: innodb_flush_log_at_trx_commit
+        flush_log = config.get("innodb_flush_log_at_trx_commit", "1")
+        if flush_log == "0":
+            findings.append(
+                "[!ANOMALY][critical] innodb_flush_log_at_trx_commit = 0，"
+                "存在数据丢失风险（崩溃可能丢失最近 1 秒的事务）"
+            )
+        elif flush_log == "2":
+            findings.append(
+                "[!ANOMALY][warning] innodb_flush_log_at_trx_commit = 2，"
+                "OS 崩溃时可能丢失数据（适合非关键业务）"
+            )
+
+        # R4: sync_binlog
+        sync_binlog = config.get("sync_binlog", "1")
+        if sync_binlog == "0":
+            findings.append(
+                "[!ANOMALY][warning] sync_binlog = 0，"
+                "binlog 未同步刷盘，主从切换时可能丢失事务"
+            )
+
+        # R5: max_connections
+        max_conn_str = config.get("max_connections", "151")
+        try:
+            max_conn = int(max_conn_str)
+            if max_conn > 1000:
+                findings.append(
+                    f"[!ANOMALY][warning] max_connections = {max_conn}，"
+                    "过高可能导致内存不足（每个连接消耗约 1-10MB）"
+                )
+            elif max_conn < 50:
+                findings.append(
+                    f"[!ANOMALY][warning] max_connections = {max_conn}，"
+                    "偏低，高并发时可能拒绝连接"
+                )
+        except (ValueError, TypeError):
+            pass
+
+        # R6: slow_query_log 未开启
+        slow_log = config.get("slow_query_log", "OFF")
+        if slow_log.upper() in ("OFF", "0"):
+            findings.append(
+                "[!ANOMALY][warning] slow_query_log 未开启，"
+                "无法捕获慢查询，建议开启并设置合理的 long_query_time"
+            )
+
+        # R7: long_query_time 过大
+        long_query_str = config.get("long_query_time", "10")
+        try:
+            long_query = float(long_query_str)
+            if long_query > 5:
+                findings.append(
+                    f"[!ANOMALY][info] long_query_time = {long_query}s，"
+                    "偏大，建议设为 1-2s 以捕获更多慢查询"
+                )
+        except (ValueError, TypeError):
+            pass
+
+        # R8: query_cache_type（MySQL 8.0 已移除，但低版本可能存在）
+        qc_type = config.get("query_cache_type", "")
+        if qc_type.upper() in ("ON", "1", "DEMAND"):
+            findings.append(
+                "[!ANOMALY][info] query_cache 已启用，"
+                "在写密集场景下反而降低性能（MySQL 8.0 已移除该功能）"
+            )
+
+        # R9: innodb_file_per_table
+        file_per_table = config.get("innodb_file_per_table", "ON")
+        if file_per_table.upper() in ("OFF", "0"):
+            findings.append(
+                "[!ANOMALY][warning] innodb_file_per_table = OFF，"
+                "所有表数据存储在共享表空间，空间回收困难"
+            )
+
+        # R10: innodb_log_file_size 过小
+        log_size_str = config.get("innodb_log_file_size", "0")
+        try:
+            log_size = int(log_size_str)
+            log_size_mb = log_size / 1024 / 1024
+            if 0 < log_size_mb < 256:
+                findings.append(
+                    f"[!ANOMALY][warning] innodb_log_file_size = {log_size_mb:.0f}MB，"
+                    "偏小（建议 512MB-2GB），可能导致频繁 checkpoint"
+                )
+        except (ValueError, TypeError):
+            pass
+
+        # R11: thread_cache_size
+        thread_cache_str = config.get("thread_cache_size", "0")
+        try:
+            thread_cache = int(thread_cache_str)
+            if thread_cache < 8:
+                findings.append(
+                    f"[!ANOMALY][info] thread_cache_size = {thread_cache}，"
+                    "偏小，短连接场景下线程创建开销大"
+                )
+        except (ValueError, TypeError):
+            pass
+
+        # R12: tmp_table_size / max_heap_table_size 不一致
+        tmp_size_str = config.get("tmp_table_size", "0")
+        heap_size_str = config.get("max_heap_table_size", "0")
+        try:
+            tmp_size = int(tmp_size_str)
+            heap_size = int(heap_size_str)
+            if tmp_size > 0 and heap_size > 0 and tmp_size != heap_size:
+                findings.append(
+                    f"[!ANOMALY][info] tmp_table_size ({tmp_size//1024//1024}MB) != "
+                    f"max_heap_table_size ({heap_size//1024//1024}MB)，"
+                    "实际临时表大小取两者较小值，建议设为一致"
+                )
+        except (ValueError, TypeError):
+            pass
+
+        # ---------- 慢查询规则 ----------
+
+        # R13: 存在高频慢查询
+        for sq in slow_queries[:5]:
+            avg_ms = sq.get("avg_query_time_ms", 0)
+            exec_count = sq.get("execution_count", 0)
+            total_ms = sq.get("total_query_time_ms", 0)
+            sql_text = sq.get("sql_text", "")[:100]
+
+            if avg_ms > 5000 and exec_count > 100:
+                findings.append(
+                    f"[!ANOMALY][critical] 高频慢查询: 平均 {avg_ms:.0f}ms × {exec_count} 次 = "
+                    f"累计 {total_ms:.0f}ms | SQL: {sql_text}"
+                )
+            elif avg_ms > 1000 and exec_count > 50:
+                findings.append(
+                    f"[!ANOMALY][warning] 慢查询: 平均 {avg_ms:.0f}ms × {exec_count} 次 | SQL: {sql_text}"
+                )
+
+        # R14: 扫描行数远大于返回行数（可能缺索引）
+        for sq in slow_queries[:5]:
+            examined = sq.get("total_rows_examined", 0)
+            sent = sq.get("total_rows_sent", 0)
+            if examined > 0 and sent > 0 and examined / max(sent, 1) > 100:
+                sql_text = sq.get("sql_text", "")[:80]
+                findings.append(
+                    f"[!ANOMALY][warning] 扫描/返回比过高: 扫描 {examined} 行，"
+                    f"仅返回 {sent} 行（比值 {examined // max(sent, 1)}:1），"
+                    f"可能缺少索引 | SQL: {sql_text}"
+                )
+
+        # ---------- 等待事件规则 ----------
+
+        # R15: I/O 等待占比高
+        top_events = wait_events.get("top_events", [])
+        for evt in top_events[:3]:
+            name = evt.get("event_name", "")
+            wait_ms = evt.get("wait_time_ms", 0)
+            if "io" in name.lower() and wait_ms > 10000:
+                findings.append(
+                    f"[!ANOMALY][warning] I/O 等待事件显著: {name}，"
+                    f"累计等待 {wait_ms:.0f}ms"
+                )
+            elif "lock" in name.lower() and wait_ms > 5000:
+                findings.append(
+                    f"[!ANOMALY][warning] 锁等待事件显著: {name}，"
+                    f"累计等待 {wait_ms:.0f}ms"
+                )
+
+        # ---------- InnoDB 状态规则 ----------
+
+        # R16: History list length 过大（MVCC 回收滞后）
+        hll = innodb.get("history_list_length", 0)
+        if hll > 10000:
+            level = "critical" if hll > 100000 else "warning"
+            findings.append(
+                f"[!ANOMALY][{level}] InnoDB History list length = {hll}，"
+                "MVCC 旧版本回收滞后，可能存在长事务未提交"
+            )
+
+        # R17: 死锁
+        if innodb.get("latest_deadlock"):
+            findings.append(
+                "[!ANOMALY][warning] 检测到最近的死锁记录，请检查事务并发模式"
+            )
+
+        # ---------- 会话规则 ----------
+
+        # R18: 活跃连接比例
+        total_conn = sessions.get("total_connections", 0)
+        active_conn = sessions.get("active_connections", 0)
+        if total_conn > 0:
+            try:
+                max_conn = int(config.get("max_connections", "151"))
+                usage_pct = total_conn / max_conn * 100
+                if usage_pct > 80:
+                    findings.append(
+                        f"[!ANOMALY][critical] 连接使用率 {usage_pct:.0f}%"
+                        f"（{total_conn}/{max_conn}），即将耗尽"
+                    )
+                elif usage_pct > 60:
+                    findings.append(
+                        f"[!ANOMALY][warning] 连接使用率 {usage_pct:.0f}%"
+                        f"（{total_conn}/{max_conn}），偏高"
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        # R19: 长时间运行的查询
+        long_running = sessions.get("long_running_queries", [])
+        for q in long_running[:3]:
+            time_sec = q.get("time_seconds", 0)
+            if time_sec > 300:
+                findings.append(
+                    f"[!ANOMALY][critical] 长时间运行查询: {time_sec}s，"
+                    f"用户={q.get('user','?')} 状态={q.get('state','?')} "
+                    f"SQL: {str(q.get('info',''))[:80]}"
+                )
+            elif time_sec > 60:
+                findings.append(
+                    f"[!ANOMALY][warning] 运行中查询: {time_sec}s，"
+                    f"用户={q.get('user','?')} SQL: {str(q.get('info',''))[:80]}"
+                )
+
+        # ---------- 复制规则 ----------
+
+        # R20: 复制延迟
+        if replication.get("is_replica"):
+            lag = replication.get("seconds_behind", 0)
+            io_running = replication.get("io_running", "")
+            sql_running = replication.get("sql_running", "")
+
+            if str(io_running).upper() != "YES":
+                findings.append(
+                    f"[!ANOMALY][critical] 复制 IO 线程未运行: {io_running}"
+                )
+            if str(sql_running).upper() != "YES":
+                findings.append(
+                    f"[!ANOMALY][critical] 复制 SQL 线程未运行: {sql_running}"
+                )
+            if lag is not None:
+                try:
+                    lag_val = int(lag)
+                    if lag_val > 60:
+                        findings.append(
+                            f"[!ANOMALY][critical] 复制延迟 {lag_val}s，严重落后"
+                        )
+                    elif lag_val > 10:
+                        findings.append(
+                            f"[!ANOMALY][warning] 复制延迟 {lag_val}s"
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+            last_error = replication.get("last_error", "")
+            if last_error:
+                findings.append(
+                    f"[!ANOMALY][critical] 复制错误: {last_error[:200]}"
+                )
+
+        # ---------- 碎片规则 ----------
+
+        # R21: 表碎片率高
+        fragmented_tables = []
+        if isinstance(db_sizes, dict):
+            fragmented_tables = db_sizes.get("fragmented_tables", [])
+        for ft in fragmented_tables[:3]:
+            frag_pct = ft.get("frag_pct", 0)
+            table_name = f"{ft.get('TABLE_SCHEMA','')}.{ft.get('TABLE_NAME','')}"
+            free_mb = ft.get("free_mb", 0)
+            if frag_pct and float(frag_pct) > 30 and free_mb and float(free_mb) > 100:
+                findings.append(
+                    f"[!ANOMALY][warning] 表碎片率高: {table_name}，"
+                    f"碎片 {frag_pct}%（{free_mb}MB 可回收），"
+                    "建议 OPTIMIZE TABLE 或 ALTER TABLE ... ENGINE=InnoDB"
+                )
+
+        # ---------- 汇总 ----------
+
+        if not findings:
+            return ""
+
+        # 按严重程度排序
+        severity_order = {"critical": 0, "warning": 1, "info": 2}
+
+        def sort_key(line: str) -> int:
+            for level, order in severity_order.items():
+                if f"[{level}]" in line:
+                    return order
+            return 3
+
+        findings.sort(key=sort_key)
+
+        header = f"共检测到 {len(findings)} 个预警项（规则引擎自动检测）：\n"
+        return header + "\n".join(f"- {f}" for f in findings)
+
+    @staticmethod
+    def analyze_sql_optimization(
+        sql: str,
+        explain_result: Dict[str, Any],
+        table_stats: Dict[str, Any],
+    ) -> str:
+        """
+        对 SQL 优化场景执行规则引擎预分析
+
+        Args:
+            sql: 原始 SQL
+            explain_result: EXPLAIN JSON 结果
+            table_stats: 各表统计信息
+
+        Returns:
+            预分析结果文本
+        """
+        findings: List[str] = []
+
+        # 分析 EXPLAIN
+        if isinstance(explain_result, dict):
+            # JSON 格式 EXPLAIN
+            query_block = explain_result.get("query_block", {})
+            table_info = query_block.get("table", {})
+
+            # 传统格式也可能在 "traditional" 键下
+            traditional = explain_result.get("traditional", [])
+
+            if table_info:
+                access_type = table_info.get("access_type", "")
+                rows = table_info.get("rows_examined_per_scan", 0)
+
+                if access_type == "ALL":
+                    findings.append(
+                        f"[!ANOMALY][critical] 全表扫描（type=ALL），"
+                        f"预估扫描 {rows} 行"
+                    )
+                elif access_type == "index":
+                    findings.append(
+                        f"[!ANOMALY][warning] 全索引扫描（type=index），"
+                        f"预估扫描 {rows} 行"
+                    )
+
+                if table_info.get("using_filesort"):
+                    findings.append(
+                        "[!ANOMALY][warning] 使用了 filesort 排序，考虑添加覆盖排序的索引"
+                    )
+                if table_info.get("using_temporary_table"):
+                    findings.append(
+                        "[!ANOMALY][warning] 使用了临时表，检查 GROUP BY / DISTINCT / UNION 是否可优化"
+                    )
+
+            # 传统格式分析
+            for row in traditional:
+                row_type = row.get("type", "")
+                extra = row.get("Extra", "")
+                rows_val = row.get("rows", 0)
+
+                if row_type == "ALL":
+                    findings.append(
+                        f"[!ANOMALY][critical] 表 {row.get('table','?')} 全表扫描，"
+                        f"预估 {rows_val} 行"
+                    )
+                if "filesort" in extra.lower():
+                    findings.append(
+                        f"[!ANOMALY][warning] 表 {row.get('table','?')} 使用 filesort"
+                    )
+                if "temporary" in extra.lower():
+                    findings.append(
+                        f"[!ANOMALY][warning] 表 {row.get('table','?')} 使用临时表"
+                    )
+
+        # 分析表数据量
+        if isinstance(table_stats, dict):
+            for table_name, stats in table_stats.items():
+                if isinstance(stats, dict):
+                    row_count = stats.get("TABLE_ROWS", 0)
+                    try:
+                        row_count = int(row_count) if row_count else 0
+                    except (ValueError, TypeError):
+                        row_count = 0
+
+                    if row_count > 10_000_000:
+                        findings.append(
+                            f"[!ANOMALY][warning] 表 {table_name} 行数约 {row_count:,}，"
+                            "大表操作需注意锁和 I/O 影响"
+                        )
+                    elif row_count > 1_000_000:
+                        findings.append(
+                            f"[!ANOMALY][info] 表 {table_name} 行数约 {row_count:,}，"
+                            "CREATE INDEX 可能需要较长时间"
+                        )
+
+        # SQL 模式检测
+        sql_upper = sql.upper().strip()
+        if "SELECT *" in sql_upper:
+            findings.append(
+                "[!ANOMALY][info] 使用了 SELECT *，建议明确指定所需列以减少 I/O"
+            )
+        if sql_upper.count("JOIN") > 3:
+            findings.append(
+                f"[!ANOMALY][warning] SQL 包含 {sql_upper.count('JOIN')} 个 JOIN，"
+                "多表关联可能导致性能问题"
+            )
+        if "NOT IN" in sql_upper or "NOT EXISTS" in sql_upper:
+            findings.append(
+                "[!ANOMALY][info] 包含 NOT IN/NOT EXISTS，考虑改写为 LEFT JOIN ... IS NULL"
+            )
+        if "LIKE '%%" in sql_upper or "LIKE '%" in sql.upper():
+            # 检查前导通配符
+            import re as _re
+            if _re.search(r"LIKE\s+'%", sql, _re.IGNORECASE):
+                findings.append(
+                    "[!ANOMALY][warning] LIKE 以 % 开头，无法使用索引前缀匹配"
+                )
+        if "ORDER BY" in sql_upper and "LIMIT" not in sql_upper:
+            findings.append(
+                "[!ANOMALY][info] 有 ORDER BY 但无 LIMIT，大结果集排序开销大"
+            )
+
+        if not findings:
+            return ""
+
+        return "规则引擎 SQL 预检结果：\n" + "\n".join(f"- {f}" for f in findings)

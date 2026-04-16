@@ -7,19 +7,6 @@
         <h2>AI 诊断助手</h2>
       </div>
       <div class="actions">
-        <el-select
-          v-model="selectedConnectionId"
-          placeholder="选择连接"
-          style="width: 200px"
-          @change="handleConnectionChange"
-        >
-          <el-option
-            v-for="conn in connections"
-            :key="conn.id"
-            :label="conn.name"
-            :value="conn.id"
-          />
-        </el-select>
         <el-tag v-if="aiStatus.enabled" type="success">
           {{ aiStatus.provider }} - {{ aiStatus.model }}
         </el-tag>
@@ -107,7 +94,70 @@
               </el-avatar>
               <span class="role-name">{{ msg.role === 'user' ? '您' : 'AI 助手' }}</span>
             </div>
-            <div class="message-content" v-html="renderMarkdown(msg.content)"></div>
+            <!-- 结构化 AI 响应 -->
+            <template v-if="msg.role === 'assistant' && hasStructuredContent(msg.content)">
+              <div class="structured-response">
+                <!-- 摘要卡片 -->
+                <div v-if="parseStructuredContent(msg.content).summary" class="summary-card">
+                  <div class="summary-header">
+                    <el-icon color="#409eff"><InfoFilled /></el-icon>
+                    <span>诊断摘要</span>
+                  </div>
+                  <div class="summary-body" v-html="renderMarkdown(parseStructuredContent(msg.content).summary)"></div>
+                </div>
+
+                <!-- 问题卡片列表 -->
+                <div v-if="parseStructuredContent(msg.content).issues.length > 0" class="issues-cards">
+                  <div class="issues-header">
+                    <el-icon color="#E6A23C"><WarningFilled /></el-icon>
+                    <span>发现 {{ parseStructuredContent(msg.content).issues.length }} 个问题</span>
+                  </div>
+                  <div
+                    v-for="(issue, i) in parseStructuredContent(msg.content).issues"
+                    :key="i"
+                    class="issue-card"
+                  >
+                    <div class="issue-card-header">
+                      <el-tag
+                        :type="issue.severity === 'critical' ? 'danger' : issue.severity === 'warning' ? 'warning' : 'info'"
+                        size="small"
+                        effect="dark"
+                      >
+                        {{ issue.severity === 'critical' ? '严重' : issue.severity === 'warning' ? '警告' : '建议' }}
+                      </el-tag>
+                      <span class="issue-title">{{ issue.title || issue.description }}</span>
+                      <el-tag v-if="issue.category" size="small" type="primary" plain>{{ issue.category }}</el-tag>
+                    </div>
+                    <p v-if="issue.detail" class="issue-detail">{{ issue.detail }}</p>
+                    <p v-if="issue.suggestion" class="issue-suggestion">
+                      <el-icon color="#67c23a"><CircleCheck /></el-icon>
+                      {{ issue.suggestion }}
+                    </p>
+                    <div v-if="issue.fix_command" class="issue-fix">
+                      <pre class="fix-sql"><code>{{ issue.fix_command }}</code></pre>
+                      <div class="fix-actions">
+                        <el-tag v-if="issue.fix_risk" :type="issue.fix_risk === 'low' ? 'success' : issue.fix_risk === 'medium' ? 'warning' : 'danger'" size="small">
+                          风险: {{ issue.fix_risk === 'low' ? '低' : issue.fix_risk === 'medium' ? '中' : '高' }}
+                        </el-tag>
+                        <el-button size="small" @click="copyText(issue.fix_command)">复制</el-button>
+                        <el-button size="small" type="primary" plain @click="openExecuteDialog(issue.fix_command)">一键执行</el-button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 详细分析 (可折叠) -->
+                <div v-if="parseStructuredContent(msg.content).detail" class="detail-section">
+                  <el-collapse>
+                    <el-collapse-item title="查看详细分析">
+                      <div class="message-content" v-html="renderMarkdown(parseStructuredContent(msg.content).detail)"></div>
+                    </el-collapse-item>
+                  </el-collapse>
+                </div>
+              </div>
+            </template>
+            <!-- 普通消息 -->
+            <div v-else class="message-content" v-html="renderMarkdown(msg.content)"></div>
           </div>
 
           <div v-if="loading" class="message assistant loading">
@@ -115,7 +165,8 @@
               <el-avatar :size="32" class="ai-avatar">AI</el-avatar>
               <span class="role-name">AI 助手</span>
             </div>
-            <div class="message-content">
+            <div v-if="streamingContent" class="message-content" v-html="renderMarkdown(streamingContent)"></div>
+            <div class="message-content" v-else>
               <el-icon class="is-loading"><Loading /></el-icon>
               <span>{{ progressMessage || '正在分析中...' }}</span>
               <el-button size="small" type="danger" plain @click="cancelRequest" style="margin-left: 12px">
@@ -150,15 +201,23 @@
       </div>
     </div>
   </div>
+
+  <!-- 一键执行对话框 -->
+  <ExecuteSQLDialog
+    v-model="showExecuteDialog"
+    :sql="pendingExecuteSQL"
+    :connection-id="selectedConnectionId || 0"
+    @executed="onSQLExecuted"
+  />
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick, watch } from 'vue'
-import { Cpu, ChatDotRound, Loading, MoreFilled } from '@element-plus/icons-vue'
+import { ref, onMounted, nextTick, watch, computed } from 'vue'
+import { Cpu, ChatDotRound, Loading, MoreFilled, WarningFilled, InfoFilled, CircleCheck } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { connectionsApi } from '@/api/connection'
+import { useConnectionStore } from '@/pinia/modules/connection'
 import {
   getAIStatus,
   getSessions,
@@ -169,20 +228,42 @@ import {
   type AIStatusResponse,
   type DiagnosisSession,
 } from '@/api/ai'
+import type { ExecuteSQLResponse } from '@/api/ai'
+import ExecuteSQLDialog from '@/components/Common/ExecuteSQLDialog.vue'
 
 // 类型定义
 type QuestionType = 'slow_database' | 'config_issues' | 'slow_queries' | 'index_suggestions' | 'buffer_pool' | 'lock_analysis' | 'connection_health' | 'io_bottleneck'
 
-// 状态
-const connections = ref<Array<{ id: number; name: string }>>([])
-const selectedConnectionId = ref<number | null>(null)
+// 全局连接
+const connectionStore = useConnectionStore()
+const selectedConnectionId = computed(() => connectionStore.selectedConnectionId)
 const aiStatus = ref<AIStatusResponse>({ enabled: false, provider: '', model: '', cache_enabled: false, rate_limit: 100 })
 const messages = ref<Array<{ role: string; content: string }>>([])
 const userInput = ref('')
+
+// 一键执行对话框
+const showExecuteDialog = ref(false)
+const pendingExecuteSQL = ref('')
+
+function openExecuteDialog(sql: string) {
+  if (!selectedConnectionId.value) {
+    ElMessage.warning('请先选择数据库连接')
+    return
+  }
+  pendingExecuteSQL.value = sql
+  showExecuteDialog.value = true
+}
+
+function onSQLExecuted(result: ExecuteSQLResponse) {
+  if (result.success) {
+    ElMessage.success('执行成功')
+  }
+}
 const loading = ref(false)
 const activeQuestion = ref<string | null>(null)
 const progressStep = ref<string>('')
 const progressMessage = ref<string>('')
+const streamingContent = ref<string>('')
 const messagesContainer = ref<HTMLElement | null>(null)
 const cancelFn = ref<(() => void) | null>(null)
 
@@ -204,22 +285,8 @@ const quickQuestions: Record<string, { label: string }> = {
 
 // 初始化
 onMounted(async () => {
-  await loadConnections()
   await loadAIStatus()
 })
-
-// 加载连接列表
-async function loadConnections() {
-  try {
-    const data = await connectionsApi.getAll()
-    connections.value = data || []
-    if (connections.value.length > 0) {
-      selectedConnectionId.value = connections.value[0].id
-    }
-  } catch (error) {
-    console.error('加载连接列表失败:', error)
-  }
-}
 
 // 连接变更时清空状态并加载会话列表
 watch(selectedConnectionId, async (newId, oldId) => {
@@ -348,6 +415,7 @@ async function askQuickQuestion(key: QuestionType) {
   loading.value = true
   progressStep.value = 'init'
   progressMessage.value = '开始诊断...'
+  streamingContent.value = ''
 
   const body = {
     connection_id: selectedConnectionId.value,
@@ -369,6 +437,10 @@ async function askQuickQuestion(key: QuestionType) {
       progressStep.value = 'analysis'
       progressMessage.value = data.message || '正在分析...'
     },
+    onChunk: (data: any) => {
+      streamingContent.value += data.text || ''
+      scrollToBottom()
+    },
     onSession: (data: any) => {
       if (data.session_id) {
         activeSessionId.value = data.session_id
@@ -377,6 +449,7 @@ async function askQuickQuestion(key: QuestionType) {
     onResult: (data: any) => {
       progressStep.value = ''
       progressMessage.value = ''
+      streamingContent.value = ''
       loading.value = false
       activeQuestion.value = null
       cancelFn.value = null
@@ -410,6 +483,7 @@ async function callAIWithSession(question: string) {
   loading.value = true
   progressStep.value = 'init'
   progressMessage.value = '开始诊断...'
+  streamingContent.value = ''
 
   const body = {
     connection_id: selectedConnectionId.value,
@@ -431,6 +505,10 @@ async function callAIWithSession(question: string) {
       progressStep.value = 'analysis'
       progressMessage.value = data.message || '正在分析...'
     },
+    onChunk: (data: any) => {
+      streamingContent.value += data.text || ''
+      scrollToBottom()
+    },
     onSession: (data: any) => {
       // 新创建的会话
       if (data.session_id) {
@@ -440,6 +518,7 @@ async function callAIWithSession(question: string) {
     onResult: (data: any) => {
       progressStep.value = ''
       progressMessage.value = ''
+      streamingContent.value = ''
       loading.value = false
       cancelFn.value = null
       if (data.session_id) {
@@ -465,14 +544,6 @@ async function callAIWithSession(question: string) {
   })
 }
 
-// 连接变化
-function handleConnectionChange() {
-  cancelRequest()
-  messages.value = []
-  activeSessionId.value = null
-  sessions.value = []
-}
-
 // 取消请求
 function cancelRequest() {
   if (cancelFn.value) {
@@ -483,6 +554,78 @@ function cancelRequest() {
   activeQuestion.value = null
   progressStep.value = ''
   progressMessage.value = ''
+  streamingContent.value = ''
+}
+
+// 结构化内容解析
+interface StructuredIssue {
+  severity?: string
+  title?: string
+  description?: string
+  category?: string
+  detail?: string
+  suggestion?: string
+  fix_command?: string
+  fix_risk?: string
+}
+
+interface StructuredContent {
+  summary: string
+  issues: StructuredIssue[]
+  detail: string
+}
+
+const structuredCache = new Map<string, StructuredContent>()
+
+function hasStructuredContent(content: string): boolean {
+  return content.includes('<!-- SUMMARY_START -->') || content.includes('<!-- ISSUES_JSON_START -->')
+}
+
+function parseStructuredContent(content: string): StructuredContent {
+  const cached = structuredCache.get(content)
+  if (cached) return cached
+
+  let summary = ''
+  let issues: StructuredIssue[] = []
+  let detail = ''
+
+  // 提取摘要
+  const summaryMatch = content.match(/<!-- SUMMARY_START -->([\s\S]*?)<!-- SUMMARY_END -->/)
+  if (summaryMatch) summary = summaryMatch[1].trim()
+
+  // 提取问题 JSON
+  const issuesMatch = content.match(/<!-- ISSUES_JSON_START -->([\s\S]*?)<!-- ISSUES_JSON_END -->/)
+  if (issuesMatch) {
+    try {
+      const parsed = JSON.parse(issuesMatch[1].trim())
+      issues = Array.isArray(parsed) ? parsed : (parsed.issues || [])
+    } catch {
+      // JSON 解析失败，忽略
+    }
+  }
+
+  // 提取详细分析
+  const detailMatch = content.match(/<!-- DETAIL_START -->([\s\S]*?)<!-- DETAIL_END -->/)
+  if (detailMatch) detail = detailMatch[1].trim()
+
+  // 如果没有结构化标记但有内容，回退到全文作为 detail
+  if (!summary && !issues.length && !detail) {
+    detail = content
+  }
+
+  const result = { summary, issues, detail }
+  structuredCache.set(content, result)
+  return result
+}
+
+// 复制文本
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制到剪贴板')
+  } catch {
+    ElMessage.error('复制失败')
+  }
 }
 
 // 渲染 Markdown
@@ -794,6 +937,123 @@ function scrollToBottom() {
 .hint {
   font-size: 12px;
   color: #909399;
+}
+
+/* 结构化响应样式 */
+.structured-response {
+  padding: 12px 16px;
+}
+
+.summary-card {
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.summary-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 15px;
+  color: #303133;
+  margin-bottom: 8px;
+}
+
+.summary-body {
+  color: #606266;
+  line-height: 1.6;
+  font-size: 14px;
+}
+
+.issues-cards {
+  margin-bottom: 16px;
+}
+
+.issues-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 15px;
+  color: #303133;
+  margin-bottom: 12px;
+}
+
+.issue-card {
+  background: #fafafa;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  transition: box-shadow 0.2s;
+}
+
+.issue-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.issue-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.issue-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
+  flex: 1;
+}
+
+.issue-detail {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.6;
+  margin: 4px 0 8px 0;
+}
+
+.issue-suggestion {
+  font-size: 13px;
+  color: #67c23a;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 4px 0 8px 0;
+  line-height: 1.5;
+}
+
+.issue-fix {
+  margin-top: 8px;
+}
+
+.fix-sql {
+  background: #282c34;
+  color: #abb2bf;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  margin: 0 0 8px 0;
+  overflow-x: auto;
+}
+
+.fix-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detail-section {
+  margin-top: 8px;
+}
+
+.detail-section :deep(.el-collapse-item__header) {
+  font-size: 14px;
+  color: #606266;
 }
 
 /* Markdown 样式 */

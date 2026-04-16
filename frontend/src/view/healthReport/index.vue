@@ -7,14 +7,6 @@
         <h2>健康巡检报告</h2>
       </div>
       <div class="actions">
-        <el-select
-          v-model="selectedConnectionId"
-          placeholder="选择连接"
-          style="width: 200px"
-          @change="handleConnectionChange"
-        >
-          <el-option v-for="c in connections" :key="c.id" :label="c.name" :value="c.id" />
-        </el-select>
         <el-button
           type="primary"
           :loading="generating"
@@ -99,6 +91,12 @@
                 </div>
               </template>
             </el-progress>
+
+            <!-- 雷达图 -->
+            <div v-if="currentReport.dimensions?.length" class="radar-chart-wrapper">
+              <v-chart :option="radarOption" autoresize style="width: 320px; height: 260px" />
+            </div>
+
             <div class="score-summary">
               <p class="score-level" :style="{ color: scoreColor(currentReport.health_score) }">
                 {{ scoreLevelText(currentReport.health_score) }}
@@ -153,10 +151,13 @@
             各维度评估详情
           </h3>
           <div class="dimension-cards">
-            <el-card v-for="dim in currentReport.dimensions" :key="dim.name" shadow="hover" class="dimension-card">
+            <el-card v-for="dim in sortedDimensions" :key="dim.name" shadow="hover" class="dimension-card"
+              :class="{ 'dimension-worst': isWorstDimension(dim.name) }"
+            >
               <template #header>
                 <div class="dimension-header">
                   <span class="dimension-name">{{ dim.name }}</span>
+                  <el-tag v-if="isWorstDimension(dim.name)" type="danger" size="small" effect="plain">需关注</el-tag>
                   <span class="dimension-weight">权重 {{ (dim.weight * 100).toFixed(0) }}%</span>
                   <span class="dimension-score" :style="{ color: scoreColor(dim.score) }">{{ dim.score }} 分</span>
                 </div>
@@ -168,8 +169,8 @@
                 :show-text="false"
                 style="margin-bottom: 12px"
               />
-              <el-collapse>
-                <el-collapse-item title="查看详细分析">
+              <el-collapse :model-value="isWorstDimension(dim.name) ? ['detail'] : []">
+                <el-collapse-item title="查看详细分析" name="detail">
                   <div class="dimension-detail" v-html="renderMarkdown(dim.analysis)"></div>
                 </el-collapse-item>
               </el-collapse>
@@ -193,7 +194,7 @@ import { Document, Delete, Check, Loading, Download, WarningFilled } from '@elem
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { connectionsApi } from '@/api/connection'
+import { useConnectionStore } from '@/pinia/modules/connection'
 import {
   generateHealthReportStream,
   getReports,
@@ -203,6 +204,13 @@ import {
   type DimensionScore,
   type ReportSSEListeners,
 } from '@/api/ai'
+import VChart from 'vue-echarts'
+import { use } from 'echarts/core'
+import { RadarChart } from 'echarts/charts'
+import { TitleComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+use([RadarChart, TitleComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 interface ProgressStep {
   name: string
@@ -224,8 +232,8 @@ interface ReportDetail {
   created_at: string
 }
 
-const connections = ref<Array<{ id: number; name: string }>>([])
-const selectedConnectionId = ref<number | null>(null)
+const connectionStore = useConnectionStore()
+const selectedConnectionId = computed(() => connectionStore.selectedConnectionId)
 const reports = ref<ReportListItem[]>([])
 const activeReportId = ref<number | null>(null)
 const currentReport = ref<ReportDetail | null>(null)
@@ -255,24 +263,18 @@ function severityTagType(severity: string): string {
 }
 
 onMounted(async () => {
-  await loadConnections()
+  if (selectedConnectionId.value) await loadReports()
 })
 
 watch(selectedConnectionId, async (newId) => {
-  if (newId) await loadReports()
-})
-
-async function loadConnections() {
-  try {
-    const data = await connectionsApi.getAll()
-    connections.value = data || []
-    if (connections.value.length > 0) {
-      selectedConnectionId.value = connections.value[0].id
-    }
-  } catch (error) {
-    console.error('加载连接列表失败:', error)
+  if (newId) {
+    await loadReports()
+  } else {
+    activeReportId.value = null
+    currentReport.value = null
+    reports.value = []
   }
-}
+})
 
 async function loadReports() {
   if (!selectedConnectionId.value) return
@@ -292,12 +294,6 @@ async function loadReport(reportId: number) {
   } catch (error) {
     ElMessage.error('加载报告失败')
   }
-}
-
-function handleConnectionChange() {
-  activeReportId.value = null
-  currentReport.value = null
-  reports.value = []
 }
 
 function startGenerate() {
@@ -404,6 +400,68 @@ function scoreLevelText(score: number): string {
   if (score >= 40) return '健康状态：需关注'
   return '健康状态：亟需优化'
 }
+
+// 最差的 3 个维度名称
+const worstDimensionNames = computed<Set<string>>(() => {
+  const dims = currentReport.value?.dimensions
+  if (!dims || dims.length === 0) return new Set()
+  const sorted = [...dims].sort((a, b) => a.score - b.score)
+  const worst3 = sorted.slice(0, 3).map((d) => d.name)
+  return new Set(worst3)
+})
+
+function isWorstDimension(name: string): boolean {
+  return worstDimensionNames.value.has(name)
+}
+
+// 按分数升序排列（最差的在前）
+const sortedDimensions = computed(() => {
+  const dims = currentReport.value?.dimensions
+  if (!dims) return []
+  return [...dims].sort((a, b) => a.score - b.score)
+})
+
+// 雷达图配置
+const radarOption = computed(() => {
+  const dims = currentReport.value?.dimensions
+  if (!dims || dims.length === 0) return {}
+
+  const indicator = dims.map((d) => ({
+    name: d.name,
+    max: 100,
+  }))
+  const values = dims.map((d) => d.score)
+
+  return {
+    tooltip: {},
+    radar: {
+      indicator,
+      shape: 'polygon',
+      radius: '70%',
+      axisName: {
+        color: '#606266',
+        fontSize: 12,
+      },
+      splitArea: {
+        areaStyle: { color: ['#fff', '#f5f7fa'] },
+      },
+    },
+    series: [
+      {
+        type: 'radar',
+        data: [
+          {
+            value: values,
+            name: '健康评分',
+            areaStyle: { color: 'rgba(64, 158, 255, 0.15)' },
+            lineStyle: { color: '#409eff', width: 2 },
+            itemStyle: { color: '#409eff' },
+          },
+        ],
+      },
+    ],
+  }
+})
 
 function renderMarkdown(content: string): string {
   if (!content) return ''
@@ -728,6 +786,17 @@ function formatDate(dateStr: string): string {
 
 .dimension-card {
   border-radius: 8px;
+}
+
+.dimension-card.dimension-worst {
+  border: 1px solid #f89898;
+  box-shadow: 0 0 8px rgba(245, 108, 108, 0.15);
+}
+
+.radar-chart-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .dimension-header {

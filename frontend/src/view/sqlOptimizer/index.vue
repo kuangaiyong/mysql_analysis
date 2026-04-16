@@ -7,18 +7,6 @@
         <h2>AI SQL 优化</h2>
       </div>
       <div class="actions">
-        <el-select
-          v-model="selectedConnectionId"
-          placeholder="选择连接"
-          style="width: 200px"
-        >
-          <el-option
-            v-for="conn in connections"
-            :key="conn.id"
-            :label="conn.name"
-            :value="conn.id"
-          />
-        </el-select>
       </div>
     </div>
 
@@ -132,15 +120,24 @@
             <div class="card-content" v-html="renderMarkdown(optimizationResult.optimization.problem_analysis)"></div>
           </el-card>
 
-          <!-- 优化后 SQL -->
+           <!-- 优化后 SQL（与原始对比） -->
           <el-card class="result-card" v-if="optimizationResult.optimization?.optimized_sql">
             <template #header>
               <div class="card-header">
                 <el-icon><CircleCheck /></el-icon>
-                <span>✅ 优化后 SQL</span>
+                <span>优化后 SQL</span>
               </div>
             </template>
-            <pre class="sql-code"><code>{{ optimizationResult.optimization.optimized_sql }}</code></pre>
+            <div class="sql-compare">
+              <div class="sql-compare-side">
+                <div class="sql-compare-label">原始 SQL</div>
+                <pre class="sql-code sql-before"><code>{{ sqlInput }}</code></pre>
+              </div>
+              <div class="sql-compare-side">
+                <div class="sql-compare-label">优化后 SQL</div>
+                <pre class="sql-code sql-after"><code>{{ optimizationResult.optimization.optimized_sql }}</code></pre>
+              </div>
+            </div>
           </el-card>
 
           <!-- 索引建议 -->
@@ -169,9 +166,14 @@
                 </div>
                 <div class="ddl-block">
                   <pre class="index-sql"><code>{{ suggestion.create_statement }}</code></pre>
-                  <el-button size="small" class="copy-ddl-btn" @click="copyText(suggestion.create_statement)">
-                    复制
-                  </el-button>
+                  <div class="ddl-actions">
+                    <el-button size="small" @click="copyText(suggestion.create_statement)">
+                      复制
+                    </el-button>
+                    <el-button size="small" type="primary" plain @click="executeIndexDDL(suggestion)">
+                      一键执行
+                    </el-button>
+                  </div>
                 </div>
                 <p class="reason">{{ suggestion.reason }}</p>
                 <p class="improvement" v-if="suggestion.estimated_improvement">
@@ -203,33 +205,41 @@
 
             <!-- 有优化后 EXPLAIN 时显示对比 -->
             <div v-if="optimizationResult.explain_after" class="explain-comparison">
-              <div class="explain-side">
-                <h4>优化前</h4>
-                <el-table :data="formatExplainData(optimizationResult.explain_before)" border size="small">
-                  <el-table-column prop="table" label="表" width="100" />
-                  <el-table-column prop="type" label="类型" width="80">
-                    <template #default="{ row }">
-                      <el-tag :type="getAccessTypeTag(row.type)" size="small">{{ row.type }}</el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="key" label="索引" width="120" />
-                  <el-table-column prop="rows" label="行数" width="80" />
-                  <el-table-column prop="Extra" label="Extra" show-overflow-tooltip />
-                </el-table>
+              <!-- 差异摘要 -->
+              <div v-if="explainDiffSummary" class="explain-diff-summary">
+                <el-tag v-for="(item, i) in explainDiffSummary" :key="i" :type="item.type" size="small" class="diff-tag">
+                  {{ item.text }}
+                </el-tag>
               </div>
-              <div class="explain-side">
-                <h4>优化后</h4>
-                <el-table :data="formatExplainData(optimizationResult.explain_after)" border size="small">
-                  <el-table-column prop="table" label="表" width="100" />
-                  <el-table-column prop="type" label="类型" width="80">
-                    <template #default="{ row }">
-                      <el-tag :type="getAccessTypeTag(row.type)" size="small">{{ row.type }}</el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="key" label="索引" width="120" />
-                  <el-table-column prop="rows" label="行数" width="80" />
-                  <el-table-column prop="Extra" label="Extra" show-overflow-tooltip />
-                </el-table>
+              <div class="explain-sides">
+                <div class="explain-side">
+                  <h4>优化前</h4>
+                  <el-table :data="formatExplainData(optimizationResult.explain_before)" border size="small" :row-class-name="explainBeforeRowClass">
+                    <el-table-column prop="table" label="表" width="100" />
+                    <el-table-column prop="type" label="类型" width="80">
+                      <template #default="{ row }">
+                        <el-tag :type="getAccessTypeTag(row.type)" size="small">{{ row.type }}</el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="key" label="索引" width="120" />
+                    <el-table-column prop="rows" label="行数" width="80" />
+                    <el-table-column prop="Extra" label="Extra" show-overflow-tooltip />
+                  </el-table>
+                </div>
+                <div class="explain-side">
+                  <h4>优化后</h4>
+                  <el-table :data="formatExplainData(optimizationResult.explain_after)" border size="small" :row-class-name="explainAfterRowClass">
+                    <el-table-column prop="table" label="表" width="100" />
+                    <el-table-column prop="type" label="类型" width="80">
+                      <template #default="{ row }">
+                        <el-tag :type="getAccessTypeTag(row.type)" size="small">{{ row.type }}</el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="key" label="索引" width="120" />
+                    <el-table-column prop="rows" label="行数" width="80" />
+                    <el-table-column prop="Extra" label="Extra" show-overflow-tooltip />
+                  </el-table>
+                </div>
               </div>
             </div>
 
@@ -250,10 +260,18 @@
       </div>
     </div>
   </div>
+
+  <!-- 一键执行对话框 -->
+  <ExecuteSQLDialog
+    v-model="showExecuteDialog"
+    :sql="pendingExecuteSQL"
+    :connection-id="selectedConnectionId || 0"
+    @executed="onSQLExecuted"
+  />
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { 
   Edit, 
@@ -268,13 +286,16 @@ import {
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { format as sqlFormat } from 'sql-formatter'
-import { connectionsApi } from '@/api/connection'
+import { useConnectionStore } from '@/pinia/modules/connection'
 import { optimizeSQLStream } from '@/api/ai'
-import type { OptimizeSQLResponse } from '@/api/ai'
+import type { OptimizeSQLResponse, ExecuteSQLResponse } from '@/api/ai'
+import ExecuteSQLDialog from '@/components/Common/ExecuteSQLDialog.vue'
+
+// 全局连接
+const connectionStore = useConnectionStore()
+const selectedConnectionId = computed(() => connectionStore.selectedConnectionId)
 
 // 状态
-const connections = ref<Array<{ id: number; name: string }>>([])
-const selectedConnectionId = ref<number | null>(null)
 const sqlInput = ref('')
 const loading = ref(false)
 const canCancel = ref(false)
@@ -283,6 +304,10 @@ const progressMessage = ref<string>('')
 const currentStep = ref(0)
 const progressSteps = ['连接数据库', '执行 EXPLAIN', 'AI 分析', '对比验证', '生成建议']
 const optimizationResult = ref<OptimizeSQLResponse | null>(null)
+
+// 一键执行对话框
+const showExecuteDialog = ref(false)
+const pendingExecuteSQL = ref('')
 
 // 示例 SQL
 const examples = [
@@ -313,24 +338,6 @@ AND email LIKE '%@gmail.com'
 ORDER BY score DESC;`
   }
 ]
-
-// 初始化
-onMounted(async () => {
-  await loadConnections()
-})
-
-// 加载连接列表
-async function loadConnections() {
-  try {
-    const data = await connectionsApi.getAll()
-    connections.value = data || []
-    if (connections.value.length > 0) {
-      selectedConnectionId.value = connections.value[0].id
-    }
-  } catch (error) {
-    console.error('加载连接列表失败:', error)
-  }
-}
 
 // 格式化 SQL
 function formatSQL() {
@@ -388,6 +395,13 @@ function handleOptimizeSQL() {
       onAnalysis: (data) => {
         progressMessage.value = data.message || '正在分析...'
         currentStep.value = 3
+      },
+      onChunk: () => {
+        // SQL 优化返回 JSON，chunk 不直接显示，仅更新进度
+        if (currentStep.value < 4) {
+          progressMessage.value = 'AI 正在生成优化建议...'
+          currentStep.value = 4
+        }
       },
       onResult: (data) => {
         progressMessage.value = ''
@@ -496,6 +510,90 @@ function getAccessTypeTag(type: string): string {
     ALL: 'danger'
   }
   return typeMap[type] || 'info'
+}
+
+// 访问类型优先级（越小越好）
+const ACCESS_TYPE_RANK: Record<string, number> = {
+  system: 0, const: 1, eq_ref: 2, ref: 3, fulltext: 4,
+  ref_or_null: 5, index_merge: 6, unique_subquery: 7,
+  index_subquery: 8, range: 9, index: 10, ALL: 11
+}
+
+// EXPLAIN 差异摘要
+const explainDiffSummary = computed(() => {
+  if (!optimizationResult.value?.explain_before || !optimizationResult.value?.explain_after) return null
+  const before = formatExplainData(optimizationResult.value.explain_before)
+  const after = formatExplainData(optimizationResult.value.explain_after)
+  const diffs: Array<{ text: string; type: string }> = []
+
+  // 行数变化
+  const rowsBefore = before.reduce((sum, r) => sum + (Number(r.rows) || 0), 0)
+  const rowsAfter = after.reduce((sum, r) => sum + (Number(r.rows) || 0), 0)
+  if (rowsBefore > 0 && rowsAfter < rowsBefore) {
+    const pct = Math.round((1 - rowsAfter / rowsBefore) * 100)
+    diffs.push({ text: `扫描行数减少 ${pct}%`, type: 'success' })
+  }
+
+  // 访问类型改善
+  for (let i = 0; i < Math.min(before.length, after.length); i++) {
+    const bType = String(before[i].type || '')
+    const aType = String(after[i].type || '')
+    if (bType !== aType) {
+      const bRank = ACCESS_TYPE_RANK[bType] ?? 99
+      const aRank = ACCESS_TYPE_RANK[aType] ?? 99
+      if (aRank < bRank) {
+        diffs.push({ text: `${before[i].table}: ${bType} → ${aType}`, type: 'success' })
+      }
+    }
+  }
+
+  // 新增索引使用
+  for (let i = 0; i < Math.min(before.length, after.length); i++) {
+    if (!before[i].key && after[i].key) {
+      diffs.push({ text: `${after[i].table}: 新使用索引 ${after[i].key}`, type: 'primary' })
+    }
+  }
+
+  return diffs.length > 0 ? diffs : null
+})
+
+// 行高亮：对比前后差异的行
+function explainBeforeRowClass({ row, rowIndex }: { row: Record<string, unknown>; rowIndex: number }): string {
+  if (!optimizationResult.value?.explain_after) return ''
+  const after = formatExplainData(optimizationResult.value.explain_after)
+  if (rowIndex >= after.length) return ''
+  const afterRow = after[rowIndex]
+  if (row.type !== afterRow.type || row.key !== afterRow.key || row.rows !== afterRow.rows) {
+    return 'explain-row-changed'
+  }
+  return ''
+}
+
+function explainAfterRowClass({ row, rowIndex }: { row: Record<string, unknown>; rowIndex: number }): string {
+  if (!optimizationResult.value?.explain_before) return ''
+  const before = formatExplainData(optimizationResult.value.explain_before)
+  if (rowIndex >= before.length) return 'explain-row-improved'
+  const beforeRow = before[rowIndex]
+  if (row.type !== beforeRow.type || row.key !== beforeRow.key || row.rows !== beforeRow.rows) {
+    return 'explain-row-improved'
+  }
+  return ''
+}
+
+// 一键执行索引 DDL
+async function executeIndexDDL(suggestion: { create_statement: string; table: string }) {
+  if (!selectedConnectionId.value) {
+    ElMessage.warning('请先选择数据库连接')
+    return
+  }
+  pendingExecuteSQL.value = suggestion.create_statement
+  showExecuteDialog.value = true
+}
+
+function onSQLExecuted(result: ExecuteSQLResponse) {
+  if (result.success) {
+    ElMessage.success('索引创建成功')
+  }
 }
 </script>
 
@@ -765,7 +863,65 @@ function getAccessTypeTag(type: string): string {
   right: 8px;
 }
 
+.ddl-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* SQL 对比视图 */
+.sql-compare {
+  display: flex;
+  gap: 16px;
+}
+
+.sql-compare-side {
+  flex: 1;
+  min-width: 0;
+}
+
+.sql-compare-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+  margin-bottom: 6px;
+}
+
+.sql-before {
+  border-left: 3px solid #F56C6C;
+}
+
+.sql-after {
+  border-left: 3px solid #67C23A;
+}
+
+/* EXPLAIN 行高亮 */
+:deep(.explain-row-changed) {
+  background-color: #fef0f0 !important;
+}
+
+:deep(.explain-row-improved) {
+  background-color: #f0f9eb !important;
+}
+
 .explain-comparison {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.explain-diff-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.diff-tag {
+  font-size: 13px;
+}
+
+.explain-sides {
   display: flex;
   gap: 16px;
 }

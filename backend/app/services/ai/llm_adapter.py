@@ -4,17 +4,24 @@ LLM 适配器模块
 支持多种 LLM 提供商的统一接口
 """
 
+import asyncio
 import json
 import logging
 import time
 import httpx
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
+from typing import AsyncGenerator, Dict, Any, List, Optional
 from decimal import Decimal
 from app.services.ai.llm_logger import LLMLogger
 from app.services.ai.utils import DecimalEncoder
 
 logger = logging.getLogger(__name__)
+
+# 重试配置
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2.0  # 秒
+RETRY_MAX_DELAY = 30.0  # 秒
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def extract_json_from_markdown(text: str) -> Any:
@@ -98,6 +105,63 @@ class LLMAdapter(ABC):
     def get_provider_name(self) -> str:
         """获取提供商名称"""
         return self.__class__.__name__.replace("Adapter", "").lower()
+
+    async def chat_with_retry(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+        max_retries: int = MAX_RETRIES,
+    ) -> str:
+        """
+        带指数退避重试的 chat 调用
+
+        对超时、429、5xx 错误自动重试
+        """
+        last_error: Optional[Exception] = None
+        for attempt in range(max_retries):
+            try:
+                return await self.chat(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                is_retryable = (
+                    isinstance(e, httpx.TimeoutException)
+                    or "超时" in err_str
+                    or "timeout" in err_str.lower()
+                    or any(str(code) in err_str for code in RETRYABLE_STATUS_CODES)
+                )
+                if not is_retryable or attempt == max_retries - 1:
+                    raise
+                delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+                logger.warning(
+                    f"{self.get_provider_name()} 请求失败 (第 {attempt + 1} 次)，"
+                    f"{delay:.1f}s 后重试: {err_str[:100]}"
+                )
+                await asyncio.sleep(delay)
+        raise last_error  # type: ignore
+
+    async def chat_stream(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> AsyncGenerator[str, None]:
+        """
+        流式 chat — 逐 chunk 返回文本
+
+        默认实现: 降级为非流式（一次性返回完整结果）
+        子类可覆盖以实现真正的 SSE 流式输出
+        """
+        result = await self.chat(messages, system_prompt, temperature, max_tokens)
+        yield result
 
 
 class ZhipuAdapter(LLMAdapter):
@@ -291,6 +355,69 @@ class ZhipuAdapter(LLMAdapter):
     def get_provider_name(self) -> str:
         return "zhipu"
 
+    async def chat_stream(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> AsyncGenerator[str, None]:
+        """智谱 GLM 真流式输出"""
+        full_messages = []
+        if system_prompt:
+            full_messages.append({"role": "system", "content": system_prompt})
+        full_messages.extend(messages)
+
+        payload = {
+            "model": self.model,
+            "messages": full_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        start_time = time.time()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream(
+                    "POST", self.chat_endpoint, headers=headers, json=payload
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        raise Exception(f"GLM API 流式请求失败: {response.status_code} - {error_text.decode()}")
+
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                        except json.JSONDecodeError:
+                            continue
+
+            duration = time.time() - start_time
+            self.llm_logger.log_response(
+                duration=duration,
+                prompt_tokens=0,
+                completion_tokens=0,
+                response_len=0,
+                response_content="[streamed]",
+            )
+        except Exception as e:
+            duration = time.time() - start_time
+            self.llm_logger.log_error(error=e, duration=duration)
+            raise
+
 
 class OpenAIAdapter(LLMAdapter):
     """OpenAI 适配器"""
@@ -460,6 +587,58 @@ class OpenAIAdapter(LLMAdapter):
 
     def get_provider_name(self) -> str:
         return "openai"
+
+    async def chat_stream(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> AsyncGenerator[str, None]:
+        """OpenAI 真流式输出"""
+        full_messages = []
+        if system_prompt:
+            full_messages.append({"role": "system", "content": system_prompt})
+        full_messages.extend(messages)
+
+        payload = {
+            "model": self.model,
+            "messages": full_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream(
+                    "POST", self.chat_endpoint, headers=headers, json=payload
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        raise Exception(f"OpenAI API 流式请求失败: {response.status_code} - {error_text.decode()}")
+
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                        except json.JSONDecodeError:
+                            continue
+        except Exception as e:
+            logger.error(f"OpenAI 流式请求失败: {e}")
+            raise
 
 
 class ClaudeAdapter(LLMAdapter):
@@ -638,6 +817,72 @@ class ClaudeAdapter(LLMAdapter):
 
     def get_provider_name(self) -> str:
         return "claude"
+
+    async def chat_stream(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> AsyncGenerator[str, None]:
+        """Claude 真流式输出（使用 Messages API SSE 格式）"""
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if system_prompt:
+            payload["system"] = system_prompt
+
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+
+        start_time = time.time()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream(
+                    "POST", self.messages_endpoint, headers=headers, json=payload
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        raise Exception(
+                            f"Claude API 流式请求失败: {response.status_code} - {error_text.decode()}"
+                        )
+
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            event_type = chunk.get("type", "")
+                            if event_type == "content_block_delta":
+                                delta = chunk.get("delta", {})
+                                text = delta.get("text", "")
+                                if text:
+                                    yield text
+                        except json.JSONDecodeError:
+                            continue
+
+            duration = time.time() - start_time
+            self.llm_logger.log_response(
+                duration=duration,
+                prompt_tokens=0,
+                completion_tokens=0,
+                response_len=0,
+                response_content="[streamed]",
+            )
+        except Exception as e:
+            duration = time.time() - start_time
+            self.llm_logger.log_error(error=e, duration=duration)
+            raise
 
 
 class KimiAdapter(OpenAIAdapter):

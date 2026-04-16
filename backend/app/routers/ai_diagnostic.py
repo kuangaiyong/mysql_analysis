@@ -93,6 +93,17 @@ class QuickDiagnosisRequest(BaseModel):
     )
 
 
+class ExecuteSQLRequest(BaseModel):
+    """SQL 执行请求"""
+    connection_id: int = Field(..., description="MySQL 连接 ID")
+    sql: str = Field(..., description="待执行的 SQL 语句")
+
+
+class ClassifySQLRequest(BaseModel):
+    """SQL 安全分类请求"""
+    sql: str = Field(..., description="待分类的 SQL 语句")
+
+
 class AIStatusResponse(BaseModel):
     """AI 状态响应"""
     enabled: bool
@@ -286,6 +297,68 @@ async def quick_diagnosis(
             detail=f"AI 服务异常: {str(e)}"
         )
 
+
+
+# ==================== SQL 执行端点 ====================
+
+@router.post("/classify-sql")
+async def classify_sql_endpoint(request: ClassifySQLRequest):
+    """SQL 安全分类"""
+    from app.services.sql_executor import classify_sql
+    result = classify_sql(request.sql)
+    return {
+        "risk_level": result.risk_level.value,
+        "risk_label": result.risk_label,
+        "risk_color": result.risk_color,
+        "description": result.description,
+        "rollback_sql": result.rollback_sql,
+        "impact": result.impact,
+        "requires_confirmation": result.requires_confirmation,
+    }
+
+
+@router.post("/execute-sql")
+async def execute_sql_endpoint(
+    request: ExecuteSQLRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    执行 SQL（带安全分类校验）
+
+    流程：分类 → 拒绝 forbidden → 执行 → 返回结果
+    """
+    from app.services.sql_executor import classify_sql, execute_sql_on_connection, RiskLevel
+
+    # 安全分类
+    classification = classify_sql(request.sql)
+
+    if classification.risk_level == RiskLevel.FORBIDDEN:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "success": False,
+                "error": f"禁止执行: {classification.description}",
+                "risk_level": classification.risk_level.value,
+                "risk_label": classification.risk_label,
+            }
+        )
+
+    # 执行
+    result = await execute_sql_on_connection(
+        connection_id=request.connection_id,
+        sql=request.sql,
+        db_session=db,
+    )
+
+    # 附加分类信息
+    result["risk_level"] = classification.risk_level.value
+    result["risk_label"] = classification.risk_label
+    result["rollback_sql"] = classification.rollback_sql
+
+    if result["success"]:
+        return JSONResponse(content=safe_jsonify(result))
+    else:
+        return JSONResponse(status_code=400, content=result)
 
 
 # ==================== SSE 辅助函数 ====================
@@ -738,7 +811,7 @@ async def generate_report_stream(
 
     async def event_generator():
         try:
-            report_service = HealthReportService(get_ai_service())
+            report_service = HealthReportService()
 
             async for event_type, data in report_service.generate_report_stream(
                 db=db,

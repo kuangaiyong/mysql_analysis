@@ -165,12 +165,13 @@ export default {
  * SSE 流式响应事件类型
  */
 export interface SSEEvent {
-  type: 'status' | 'context' | 'analysis' | 'comparison' | 'result' | 'error'
+  type: 'status' | 'context' | 'analysis' | 'comparison' | 'chunk' | 'result' | 'error'
   message: string
   success?: boolean
   answer?: string
   error?: string
   session_id?: number
+  text?: string
   data?: Record<string, unknown>
 }
 
@@ -182,6 +183,7 @@ export interface SSEListeners {
   onContext?: (data: SSEEvent) => void
   onAnalysis?: (data: SSEEvent) => void
   onComparison?: (data: SSEEvent) => void
+  onChunk?: (data: SSEEvent) => void
   onResult?: (data: SSEEvent) => void
   onError?: (data: SSEEvent) => void
 }
@@ -290,6 +292,7 @@ export function ssePost(
   if (listeners.onContext) extendedListeners.onContext = listeners.onContext
   if (listeners.onAnalysis) extendedListeners.onAnalysis = listeners.onAnalysis
   if (listeners.onComparison) extendedListeners.onComparison = listeners.onComparison
+  if (listeners.onChunk) extendedListeners.onChunk = listeners.onChunk
   if (listeners.onResult) extendedListeners.onResult = listeners.onResult
   if (listeners.onError) extendedListeners.onError = listeners.onError
 
@@ -363,6 +366,7 @@ function createFetchSSEConnectionEx(
                 case 'context': listeners.onContext?.(eventData); break
                 case 'analysis': listeners.onAnalysis?.(eventData); break
                 case 'comparison': listeners.onComparison?.(eventData); break
+                case 'chunk': listeners.onChunk?.(eventData); break
                 case 'result': listeners.onResult?.(eventData); break
                 case 'error': listeners.onError?.(eventData); break
                 default: {
@@ -463,6 +467,9 @@ function createFetchSSEConnection(
                   break
                 case 'comparison':
                   listeners.onComparison?.(eventData)
+                  break
+                case 'chunk':
+                  listeners.onChunk?.(eventData)
                   break
                 case 'result':
                   listeners.onResult?.(eventData)
@@ -686,4 +693,49 @@ export function generateHealthReportStream(
     })
 
   return controller
+}
+
+
+// ==================== SQL 执行 API ====================
+
+export interface SQLClassification {
+  risk_level: 'low' | 'medium' | 'high' | 'forbidden'
+  risk_label: string
+  risk_color: string
+  description: string
+  rollback_sql?: string
+  impact?: string
+  requires_confirmation: boolean
+}
+
+export interface ExecuteSQLRequest {
+  connection_id: number
+  sql: string
+}
+
+export interface ExecuteSQLResponse {
+  success: boolean
+  rows_affected?: number
+  data?: Record<string, unknown>[]
+  message?: string
+  error?: string
+  risk_level?: string
+  risk_label?: string
+  rollback_sql?: string
+}
+
+/**
+ * SQL 安全分类
+ */
+export async function classifySQL(sql: string): Promise<SQLClassification> {
+  const response = await client.post('/ai/classify-sql', { sql })
+  return response.data
+}
+
+/**
+ * 执行 SQL（带安全校验）
+ */
+export async function executeSQL(request: ExecuteSQLRequest): Promise<ExecuteSQLResponse> {
+  const response = await client.post('/ai/execute-sql', request)
+  return response.data
 }
