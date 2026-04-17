@@ -84,6 +84,11 @@ class ExplainAnalyzeRequest(BaseModel):
     sql: str = Field(..., description="待执行 EXPLAIN 的 SQL 语句")
 
 
+class ConnectionOnlyRequest(BaseModel):
+    """仅需连接 ID 的请求"""
+    connection_id: int = Field(..., description="MySQL 连接 ID")
+
+
 class QuickDiagnosisRequest(BaseModel):
     """快速诊断请求"""
     connection_id: int = Field(..., description="MySQL 连接 ID")
@@ -908,3 +913,267 @@ async def export_report_markdown(
             "Content-Disposition": f'attachment; filename="health-report-{report_id}.md"'
         }
     )
+
+
+# ==================== EXPLAIN 分析 SSE 端点 ====================
+
+@router.post("/explain-analyze/stream")
+async def explain_analyze_stream(
+    request: Request,
+    explain_request: ExplainAnalyzeRequest,
+    db: Session = Depends(get_db),
+):
+    """执行 EXPLAIN 并由 AI 进行流式分析"""
+    from app.services.ai.context_builder import AIContextBuilder
+
+    async def event_generator():
+        context_builder = None
+        try:
+            yield _format_sse_event("status", {"message": "正在执行 EXPLAIN...", "step": "explain"})
+
+            context_builder = AIContextBuilder(db, explain_request.connection_id)
+            connector = context_builder._get_connector()
+
+            sql_clean = explain_request.sql.strip()
+            sql_lower = sql_clean.lower()
+            if sql_lower.startswith("explain"):
+                sql_to_explain = sql_clean[len("explain"):].strip()
+            else:
+                sql_to_explain = sql_clean
+
+            explain_rows = connector.execute_query(f"EXPLAIN {sql_to_explain}")
+            explain_result = {"rows": explain_rows}
+            context_builder.close()
+            context_builder = None
+
+            yield _format_sse_event("context", {
+                "message": "EXPLAIN 执行完成",
+                "explain_result": safe_jsonify(explain_result),
+            })
+
+            service = get_ai_service()
+            async for event_type, data in service.explain_interpret_stream(
+                sql=sql_to_explain,
+                explain_result=explain_result,
+            ):
+                if await request.is_disconnected():
+                    return
+                yield _format_sse_event(event_type, safe_jsonify(data) if event_type == "result" else data)
+
+        except Exception as e:
+            logger.error(f"EXPLAIN 分析 SSE 错误: {e}")
+            yield _format_sse_event("error", {"message": str(e)})
+        finally:
+            if context_builder:
+                context_builder.close()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+# ==================== SQL 优化历史记录端点 ====================
+
+class SqlOptRecordResponse(BaseModel):
+    """SQL 优化记录响应"""
+    id: int
+    connection_id: int
+    original_sql: str
+    created_at: datetime
+
+
+@router.get("/sql-optimization-records", response_model=List[SqlOptRecordResponse])
+async def list_sql_optimization_records(
+    connection_id: int = Query(..., description="MySQL 连接 ID"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """获取 SQL 优化历史记录列表"""
+    records = diagnosis_crud.get_sql_optimization_records(db, connection_id, limit)
+    return [
+        SqlOptRecordResponse(
+            id=r.id,
+            connection_id=r.connection_id,
+            original_sql=r.original_sql,
+            created_at=r.created_at,
+        )
+        for r in records
+    ]
+
+
+@router.get("/sql-optimization-records/{record_id}")
+async def get_sql_optimization_record(
+    record_id: int,
+    db: Session = Depends(get_db),
+):
+    """获取 SQL 优化记录详情"""
+    record = diagnosis_crud.get_sql_optimization_record(db, record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return JSONResponse(content=safe_jsonify({
+        "id": record.id,
+        "connection_id": record.connection_id,
+        "original_sql": record.original_sql,
+        "result": json.loads(record.result_json) if record.result_json else {},
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+    }))
+
+
+@router.delete("/sql-optimization-records/{record_id}")
+async def delete_sql_optimization_record(
+    record_id: int,
+    db: Session = Depends(get_db),
+):
+    """删除 SQL 优化记录"""
+    ok = diagnosis_crud.delete_sql_optimization_record(db, record_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return {"success": True, "message": "记录已删除"}
+
+
+@router.post("/sql-optimization-records/save")
+async def save_sql_optimization_record(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """手动保存 SQL 优化记录"""
+    body = await request.json()
+    connection_id = body.get("connection_id")
+    original_sql = body.get("original_sql", "")
+    result = body.get("result", {})
+    if not connection_id or not original_sql:
+        raise HTTPException(status_code=400, detail="缺少 connection_id 或 original_sql")
+    record = diagnosis_crud.create_sql_optimization_record(
+        db=db,
+        connection_id=connection_id,
+        original_sql=original_sql,
+        result_json=json.dumps(result, ensure_ascii=False),
+    )
+    return {"success": True, "id": record.id}
+
+
+# ==================== EXPLAIN 分析历史记录端点 ====================
+
+class ExplainRecordResponse(BaseModel):
+    """EXPLAIN 分析记录响应"""
+    id: int
+    connection_id: int
+    sql: str
+    created_at: datetime
+
+
+@router.get("/explain-analysis-records", response_model=List[ExplainRecordResponse])
+async def list_explain_analysis_records(
+    connection_id: int = Query(..., description="MySQL 连接 ID"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """获取 EXPLAIN 分析历史记录列表"""
+    records = diagnosis_crud.get_explain_analysis_records(db, connection_id, limit)
+    return [
+        ExplainRecordResponse(
+            id=r.id,
+            connection_id=r.connection_id,
+            sql=r.sql,
+            created_at=r.created_at,
+        )
+        for r in records
+    ]
+
+
+@router.get("/explain-analysis-records/{record_id}")
+async def get_explain_analysis_record(
+    record_id: int,
+    db: Session = Depends(get_db),
+):
+    """获取 EXPLAIN 分析记录详情"""
+    record = diagnosis_crud.get_explain_analysis_record(db, record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return JSONResponse(content=safe_jsonify({
+        "id": record.id,
+        "connection_id": record.connection_id,
+        "sql": record.sql,
+        "result": json.loads(record.result_json) if record.result_json else {},
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+    }))
+
+
+@router.delete("/explain-analysis-records/{record_id}")
+async def delete_explain_analysis_record(
+    record_id: int,
+    db: Session = Depends(get_db),
+):
+    """删除 EXPLAIN 分析记录"""
+    ok = diagnosis_crud.delete_explain_analysis_record(db, record_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return {"success": True, "message": "记录已删除"}
+
+
+@router.post("/explain-analysis-records/save")
+async def save_explain_analysis_record(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """手动保存 EXPLAIN 分析记录"""
+    body = await request.json()
+    connection_id = body.get("connection_id")
+    sql = body.get("sql", "")
+    result = body.get("result", {})
+    if not connection_id or not sql:
+        raise HTTPException(status_code=400, detail="缺少 connection_id 或 sql")
+    record = diagnosis_crud.create_explain_analysis_record(
+        db=db,
+        connection_id=connection_id,
+        sql=sql,
+        result_json=json.dumps(result, ensure_ascii=False),
+    )
+    return {"success": True, "id": record.id}
+
+
+# ==================== 5 个新 AI 模块 SSE 端点 ====================
+
+def _make_analysis_sse_endpoint(service_method_name: str, label: str):
+    """工厂函数：创建通用分析 SSE 端点"""
+    async def endpoint(
+        request: Request,
+        body: ConnectionOnlyRequest,
+        db: Session = Depends(get_db),
+    ):
+        async def event_generator():
+            try:
+                service = get_ai_service()
+                method = getattr(service, service_method_name)
+                async for event_type, data in method(db=db, connection_id=body.connection_id):
+                    if await request.is_disconnected():
+                        return
+                    yield _format_sse_event(event_type, safe_jsonify(data) if event_type == "result" else data)
+            except Exception as e:
+                logger.error(f"{label} SSE 错误: {e}")
+                yield _format_sse_event("error", {"message": str(e)})
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            }
+        )
+    endpoint.__doc__ = f"{label} - SSE 流式响应"
+    return endpoint
+
+
+router.post("/index-advisor/stream")(_make_analysis_sse_endpoint("index_advisor_stream", "索引顾问"))
+router.post("/lock-analysis/stream")(_make_analysis_sse_endpoint("lock_analysis_stream", "锁分析"))
+router.post("/slow-query-patrol/stream")(_make_analysis_sse_endpoint("slow_query_patrol_stream", "慢查询巡检"))
+router.post("/config-tuning/stream")(_make_analysis_sse_endpoint("config_tuning_stream", "配置调优"))
+router.post("/capacity-prediction/stream")(_make_analysis_sse_endpoint("capacity_prediction_stream", "容量预测"))

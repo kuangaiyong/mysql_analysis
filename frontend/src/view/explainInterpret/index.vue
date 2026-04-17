@@ -7,10 +7,43 @@
         <h2>AI EXPLAIN 优化分析</h2>
       </div>
       <div class="actions">
+        <el-button size="small" @click="showHistory = !showHistory">
+          {{ showHistory ? '隐藏历史' : '📜 历史记录' }}
+        </el-button>
       </div>
     </div>
 
     <div class="main-content">
+      <!-- 历史侧边栏 -->
+      <div v-if="showHistory" class="history-sidebar">
+        <div class="sidebar-header">
+          <h3>历史记录</h3>
+          <el-button size="small" text @click="loadHistory" :loading="historyLoading">
+            刷新
+          </el-button>
+        </div>
+        <div v-if="historyRecords.length === 0" class="sidebar-empty">
+          暂无历史记录
+        </div>
+        <div v-else class="history-list">
+          <div
+            v-for="record in historyRecords"
+            :key="record.id"
+            class="history-item"
+            :class="{ active: activeRecordId === record.id }"
+            @click="loadRecord(record.id)"
+          >
+            <div class="history-sql">{{ truncateSQL(record.sql) }}</div>
+            <div class="history-meta">
+              <span>{{ formatTime(record.created_at) }}</span>
+              <el-button size="small" text type="danger" @click.stop="deleteRecord(record.id)">
+                删除
+              </el-button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 输入区域 -->
       <div class="input-section">
         <h3>输入 SQL</h3>
@@ -34,11 +67,22 @@
           type="primary"
           size="large"
           @click="analyze"
-          :loading="loading"
+          :loading="loading && !canCancel"
           :disabled="(!sqlInput || !selectedConnectionId) && !loading"
           class="analyze-btn"
         >
-          AI 优化分析
+          <span v-if="loading">{{ progressMessage || '分析中...' }}</span>
+          <span v-else>🤖 AI 优化分析</span>
+        </el-button>
+
+        <el-button
+          v-if="loading"
+          type="danger"
+          size="large"
+          @click="cancelAnalysis"
+          class="cancel-btn"
+        >
+          取消分析
         </el-button>
       </div>
 
@@ -46,17 +90,17 @@
       <div class="result-section">
         <h3>分析结果</h3>
 
-        <div v-if="!result && !loading" class="empty-state">
+        <div v-if="!result && !loading && !streamingText" class="empty-state">
           <el-icon :size="64" color="#909399"><DocumentCopy /></el-icon>
           <p>选择连接并输入 SQL 后点击"AI 优化分析"</p>
         </div>
 
-        <div v-if="loading" class="loading-state">
+        <div v-if="loading && !streamingText" class="loading-state">
           <el-icon class="is-loading" :size="48"><Loading /></el-icon>
-          <p>AI 正在分析执行计划...</p>
+          <p>{{ progressMessage || 'AI 正在分析执行计划...' }}</p>
         </div>
 
-        <div v-if="result && !loading" class="result-content">
+        <div v-if="(result || streamingText) && !(loading && !streamingText)" class="result-content">
           <!-- EXPLAIN 结果表格 -->
           <div v-if="explainRows.length > 0" class="explain-table-section">
             <h4>执行计划</h4>
@@ -112,8 +156,12 @@
             </el-table>
           </div>
 
-          <!-- AI 分析 -->
-          <div class="interpretation" v-html="renderMarkdown(result.interpretation || '')"></div>
+          <!-- AI 分析（流式或完成后） -->
+          <div class="interpretation" v-html="renderMarkdown(streamingText || result?.interpretation || '')"></div>
+          <div v-if="loading && streamingText" class="streaming-indicator">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>AI 正在生成分析...</span>
+          </div>
         </div>
       </div>
     </div>
@@ -121,14 +169,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DocumentCopy, Loading } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useConnectionStore } from '@/pinia/modules/connection'
-import { explainAnalyze } from '@/api/ai'
-import type { ExplainResponse } from '@/api/ai'
+import {
+  explainAnalyzeStream,
+  getExplainRecords,
+  getExplainRecordDetail,
+  deleteExplainRecord,
+  saveExplainRecord,
+} from '@/api/ai'
+import type { ExplainResponse, ExplainRecord } from '@/api/ai'
 
 // 全局连接
 const connectionStore = useConnectionStore()
@@ -137,7 +191,17 @@ const selectedConnectionId = computed(() => connectionStore.selectedConnectionId
 // 状态
 const sqlInput = ref('')
 const loading = ref(false)
+const canCancel = ref(false)
+const abortController = ref<AbortController | null>(null)
+const progressMessage = ref('')
+const streamingText = ref('')
 const result = ref<ExplainResponse | null>(null)
+
+// 历史记录
+const showHistory = ref(false)
+const historyLoading = ref(false)
+const historyRecords = ref<ExplainRecord[]>([])
+const activeRecordId = ref<number | null>(null)
 
 // EXPLAIN 行数据
 const explainRows = computed(() => {
@@ -207,31 +271,75 @@ ORDER BY o.amount DESC
 LIMIT 50`
 }
 
-// 执行 EXPLAIN 并 AI 分析
-async function analyze() {
+// 执行 EXPLAIN 并 AI 分析（SSE 流式）
+function analyze() {
   if (!sqlInput.value.trim() || !selectedConnectionId.value) return
 
-  try {
-    loading.value = true
-    result.value = null
+  loading.value = true
+  canCancel.value = true
+  result.value = null
+  streamingText.value = ''
+  progressMessage.value = '开始分析...'
 
-    const response = await explainAnalyze({
-      connection_id: selectedConnectionId.value,
-      sql: sqlInput.value.trim()
-    })
-
-    if (response.success) {
-      result.value = response
-      ElMessage.success('分析完成')
-    } else {
-      ElMessage.error(response.error || '分析失败')
+  abortController.value = explainAnalyzeStream(
+    selectedConnectionId.value,
+    sqlInput.value.trim(),
+    {
+      onStatus: (data) => {
+        progressMessage.value = data.message || '初始化...'
+      },
+      onContext: (data) => {
+        progressMessage.value = 'EXPLAIN 执行完成'
+        // 提取 EXPLAIN 结果用于显示表格
+        if (data.explain_result) {
+          result.value = {
+            success: true,
+            sql: sqlInput.value.trim(),
+            interpretation: '',
+            original_explain: data.explain_result,
+          } as ExplainResponse
+        }
+      },
+      onAnalysis: (data) => {
+        progressMessage.value = data.message || '正在分析...'
+      },
+      onChunk: (text) => {
+        streamingText.value += text
+      },
+      onResult: (data) => {
+        progressMessage.value = ''
+        streamingText.value = ''
+        if (data.success) {
+          result.value = data as ExplainResponse
+          autoSaveResult(sqlInput.value.trim(), data as ExplainResponse)
+          ElMessage.success('分析完成')
+        } else {
+          ElMessage.error(data.error || '分析失败')
+        }
+        loading.value = false
+        canCancel.value = false
+        abortController.value = null
+      },
+      onError: (msg) => {
+        progressMessage.value = ''
+        streamingText.value = ''
+        ElMessage.error(`分析失败: ${msg}`)
+        loading.value = false
+        canCancel.value = false
+        abortController.value = null
+      },
     }
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : '未知错误'
-    ElMessage.error(`分析失败: ${errorMessage}`)
-  } finally {
-    loading.value = false
-  }
+  )
+}
+
+function cancelAnalysis() {
+  abortController.value?.abort()
+  abortController.value = null
+  loading.value = false
+  canCancel.value = false
+  progressMessage.value = ''
+  streamingText.value = ''
+  ElMessage.info('已取消分析')
 }
 
 // 渲染 Markdown
@@ -242,6 +350,69 @@ function renderMarkdown(content: string): string {
     return content
   }
 }
+
+// ==================== 历史记录 ====================
+
+async function loadHistory() {
+  if (!selectedConnectionId.value) return
+  historyLoading.value = true
+  try {
+    historyRecords.value = await getExplainRecords(selectedConnectionId.value)
+  } catch {
+    ElMessage.error('加载历史记录失败')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+async function loadRecord(recordId: number) {
+  try {
+    const detail = await getExplainRecordDetail(recordId)
+    activeRecordId.value = recordId
+    sqlInput.value = detail.sql
+    result.value = detail.result as unknown as ExplainResponse
+    streamingText.value = ''
+  } catch {
+    ElMessage.error('加载记录详情失败')
+  }
+}
+
+async function deleteRecord(recordId: number) {
+  try {
+    await deleteExplainRecord(recordId)
+    historyRecords.value = historyRecords.value.filter(r => r.id !== recordId)
+    if (activeRecordId.value === recordId) activeRecordId.value = null
+    ElMessage.success('已删除')
+  } catch {
+    ElMessage.error('删除失败')
+  }
+}
+
+async function autoSaveResult(sql: string, resultData: ExplainResponse) {
+  if (!selectedConnectionId.value) return
+  try {
+    await saveExplainRecord(selectedConnectionId.value, sql, resultData as unknown as Record<string, any>)
+    if (showHistory.value) loadHistory()
+  } catch { /* ignore */ }
+}
+
+function truncateSQL(sql: string): string {
+  const oneLine = sql.replace(/\s+/g, ' ').trim()
+  return oneLine.length > 60 ? oneLine.slice(0, 60) + '...' : oneLine
+}
+
+function formatTime(dateStr: string): string {
+  const d = new Date(dateStr)
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+watch(selectedConnectionId, () => {
+  if (showHistory.value) loadHistory()
+})
+
+watch(showHistory, (val) => {
+  if (val) loadHistory()
+})
 </script>
 
 <style scoped>
@@ -328,6 +499,94 @@ function renderMarkdown(content: string): string {
 
 .analyze-btn {
   width: 100%;
+}
+
+.cancel-btn {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.streaming-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  color: #409eff;
+  font-size: 13px;
+}
+
+/* 历史侧边栏 */
+.history-sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: white;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.sidebar-header h3 {
+  margin: 0;
+  font-size: 14px;
+  color: #303133;
+}
+
+.sidebar-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #909399;
+  font-size: 13px;
+}
+
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.history-item {
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  transition: background 0.2s;
+}
+
+.history-item:hover {
+  background: #f5f7fa;
+}
+
+.history-item.active {
+  background: #ecf5ff;
+  border: 1px solid #b3d8ff;
+}
+
+.history-sql {
+  font-size: 12px;
+  color: #303133;
+  font-family: 'Fira Code', monospace;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.history-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 11px;
+  color: #909399;
 }
 
 .empty-state,

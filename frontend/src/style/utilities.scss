@@ -359,7 +359,7 @@
 
   // 关键指标变体
   &.critical {
-    background: linear-gradient(135deg, #fff5f5 0%, #fff 100%);
+    background: linear-gradient(135deg, rgba(245, 108, 108, 0.1) 0%, var(--el-bg-color-overlay, #fff) 100%);
     border-left: 3px solid var(--danger-color);
   }
 }

@@ -23,6 +23,38 @@ html.dark {
   --el-box-shadow-light: 0 0 12px rgba(0, 0, 0, 0.72);
   --el-box-shadow-lighter: 0 0 6px rgba(0, 0, 0, 0.72);
   --el-box-shadow-dark: 0 16px 48px 16px rgba(0, 0, 0, 0.72), 0 12px 32px rgba(0, 0, 0, 0.6), 0 8px 16px -8px rgba(0, 0, 0, 0.6);
+
+  /* Element Plus 菜单组件暗色 */
+  --el-menu-bg-color: #1e293b;
+  --el-menu-hover-bg-color: #334155;
+  --el-menu-text-color: #cbd5e1;
+  --el-menu-active-color: #409eff;
+  --el-menu-item-bg-color-active: #334155;
+
+  /* Element Plus 卡片/对话框/弹出层暗色 */
+  --el-card-bg-color: #1e293b;
+  --el-dialog-bg-color: #1e293b;
+  --el-popover-bg-color: #1e293b;
+  --el-tooltip-bg-color: #334155;
+  --el-dropdown-menu-box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+  /* Element Plus 表格暗色 */
+  --el-table-bg-color: #0f172a;
+  --el-table-tr-bg-color: #0f172a;
+  --el-table-header-bg-color: #1e293b;
+  --el-table-row-hover-bg-color: #334155;
+  --el-table-border-color: #334155;
+
+  /* Element Plus 输入框暗色 */
+  --el-input-bg-color: #1e293b;
+  --el-input-border-color: #334155;
+  --el-input-hover-border-color: #475569;
+  --el-input-focus-border-color: #409eff;
+
+  /* Element Plus Tag 暗色 */
+  --el-tag-bg-color: #334155;
+
+  color-scheme: dark;
 }
 
 html {

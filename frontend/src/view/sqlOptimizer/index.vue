@@ -7,10 +7,42 @@
         <h2>AI SQL 优化</h2>
       </div>
       <div class="actions">
+        <el-button size="small" @click="showHistory = !showHistory">
+          {{ showHistory ? '隐藏历史' : '📜 历史记录' }}
+        </el-button>
       </div>
     </div>
 
     <div class="main-content">
+      <!-- 历史侧边栏 -->
+      <div v-if="showHistory" class="history-sidebar">
+        <div class="sidebar-header">
+          <h3>历史记录</h3>
+          <el-button size="small" text @click="loadHistory" :loading="historyLoading">
+            刷新
+          </el-button>
+        </div>
+        <div v-if="historyRecords.length === 0" class="sidebar-empty">
+          暂无历史记录
+        </div>
+        <div v-else class="history-list">
+          <div
+            v-for="record in historyRecords"
+            :key="record.id"
+            class="history-item"
+            :class="{ active: activeRecordId === record.id }"
+            @click="loadRecord(record.id)"
+          >
+            <div class="history-sql">{{ truncateSQL(record.original_sql) }}</div>
+            <div class="history-meta">
+              <span>{{ formatTime(record.created_at) }}</span>
+              <el-button size="small" text type="danger" @click.stop="deleteRecord(record.id)">
+                删除
+              </el-button>
+            </div>
+          </div>
+        </div>
+      </div>
       <!-- 左侧：SQL 输入 -->
       <div class="sql-input-panel">
         <div class="panel-header">
@@ -271,7 +303,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { 
   Edit, 
@@ -287,8 +319,8 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { format as sqlFormat } from 'sql-formatter'
 import { useConnectionStore } from '@/pinia/modules/connection'
-import { optimizeSQLStream } from '@/api/ai'
-import type { OptimizeSQLResponse, ExecuteSQLResponse } from '@/api/ai'
+import { optimizeSQLStream, getSqlOptRecords, getSqlOptRecordDetail, deleteSqlOptRecord, saveSqlOptRecord } from '@/api/ai'
+import type { OptimizeSQLResponse, ExecuteSQLResponse, SqlOptRecord } from '@/api/ai'
 import ExecuteSQLDialog from '@/components/Common/ExecuteSQLDialog.vue'
 
 // 全局连接
@@ -304,6 +336,12 @@ const progressMessage = ref<string>('')
 const currentStep = ref(0)
 const progressSteps = ['连接数据库', '执行 EXPLAIN', 'AI 分析', '对比验证', '生成建议']
 const optimizationResult = ref<OptimizeSQLResponse | null>(null)
+
+// 历史记录
+const showHistory = ref(false)
+const historyLoading = ref(false)
+const historyRecords = ref<SqlOptRecord[]>([])
+const activeRecordId = ref<number | null>(null)
 
 // 一键执行对话框
 const showExecuteDialog = ref(false)
@@ -409,6 +447,7 @@ function handleOptimizeSQL() {
         const result = data as unknown as OptimizeSQLResponse
         if (result.success) {
           optimizationResult.value = result
+          autoSaveResult(sqlInput.value.trim(), result)
           ElMessage.success('SQL 优化分析完成')
         } else {
           ElMessage.error(result.error || '优化分析失败')
@@ -595,6 +634,73 @@ function onSQLExecuted(result: ExecuteSQLResponse) {
     ElMessage.success('索引创建成功')
   }
 }
+
+// ==================== 历史记录 ====================
+
+async function loadHistory() {
+  if (!selectedConnectionId.value) return
+  historyLoading.value = true
+  try {
+    historyRecords.value = await getSqlOptRecords(selectedConnectionId.value)
+  } catch {
+    ElMessage.error('加载历史记录失败')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+async function loadRecord(recordId: number) {
+  try {
+    const detail = await getSqlOptRecordDetail(recordId)
+    activeRecordId.value = recordId
+    sqlInput.value = detail.original_sql
+    optimizationResult.value = detail.result as unknown as OptimizeSQLResponse
+  } catch {
+    ElMessage.error('加载记录详情失败')
+  }
+}
+
+async function deleteRecord(recordId: number) {
+  try {
+    await deleteSqlOptRecord(recordId)
+    historyRecords.value = historyRecords.value.filter(r => r.id !== recordId)
+    if (activeRecordId.value === recordId) {
+      activeRecordId.value = null
+    }
+    ElMessage.success('已删除')
+  } catch {
+    ElMessage.error('删除失败')
+  }
+}
+
+async function autoSaveResult(sql: string, result: OptimizeSQLResponse) {
+  if (!selectedConnectionId.value) return
+  try {
+    await saveSqlOptRecord(selectedConnectionId.value, sql, result as unknown as Record<string, any>)
+    if (showHistory.value) loadHistory()
+  } catch {
+    // 保存失败不影响用户体验
+  }
+}
+
+function truncateSQL(sql: string): string {
+  const oneLine = sql.replace(/\s+/g, ' ').trim()
+  return oneLine.length > 60 ? oneLine.slice(0, 60) + '...' : oneLine
+}
+
+function formatTime(dateStr: string): string {
+  const d = new Date(dateStr)
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+// 连接变化时自动加载历史
+watch(selectedConnectionId, () => {
+  if (showHistory.value) loadHistory()
+})
+
+watch(showHistory, (val) => {
+  if (val) loadHistory()
+})
 </script>
 
 <style scoped>
@@ -950,5 +1056,79 @@ function onSQLExecuted(result: ExecuteSQLResponse) {
 .card-content :deep(ol) {
   padding-left: 20px;
   margin: 8px 0;
+}
+
+/* 历史侧边栏 */
+.history-sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: white;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.sidebar-header h3 {
+  margin: 0;
+  font-size: 14px;
+  color: #303133;
+}
+
+.sidebar-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #909399;
+  font-size: 13px;
+}
+
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.history-item {
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  transition: background 0.2s;
+}
+
+.history-item:hover {
+  background: #f5f7fa;
+}
+
+.history-item.active {
+  background: #ecf5ff;
+  border: 1px solid #b3d8ff;
+}
+
+.history-sql {
+  font-size: 12px;
+  color: #303133;
+  font-family: 'Fira Code', monospace;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.history-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 11px;
+  color: #909399;
 }
 </style>

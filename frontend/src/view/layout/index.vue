@@ -4,7 +4,7 @@
       <Header />
     </div>
     <div class="gva-container flex-1 flex overflow-hidden">
-      <aside class="gva-aside bg-slate-100 dark:bg-slate-900">
+      <aside class="gva-aside">
         <Aside />
       </aside>
       <main class="gva-main flex-1 flex flex-col overflow-hidden">
@@ -13,11 +13,7 @@
         </div>
         <div class="gva-content flex-1 overflow-auto p-4">
           <router-view v-slot="{ Component, route }">
-            <transition name="fade-transform" mode="out-in">
-              <keep-alive>
-                <component :is="Component" :key="route.path" />
-              </keep-alive>
-            </transition>
+            <component :is="Component" :key="route.path" />
           </router-view>
         </div>
         <div class="gva-footer h-8 flex items-center justify-center text-sm text-slate-500">
@@ -52,6 +48,7 @@ defineOptions({
 
 .gva-aside {
   width: 220px;
+  background-color: var(--el-menu-bg-color, var(--el-bg-color));
   box-shadow: 1px 0 4px rgba(0, 0, 0, 0.08);
   z-index: 9;
 }

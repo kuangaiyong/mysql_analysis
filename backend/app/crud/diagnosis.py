@@ -7,7 +7,10 @@ from typing import List, Optional
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from app.models.diagnosis import DiagnosisSession, DiagnosisMessage, DiagnosisReport
+from app.models.diagnosis import (
+    DiagnosisSession, DiagnosisMessage, DiagnosisReport,
+    SqlOptimizationRecord, ExplainAnalysisRecord,
+)
 
 
 # ==================== 会话 CRUD ====================
@@ -188,5 +191,107 @@ def delete_report(db: Session, report_id: int) -> bool:
     if not report:
         return False
     db.delete(report)
+    db.commit()
+    return True
+
+
+# ==================== SQL 优化记录 CRUD ====================
+
+def create_sql_optimization_record(
+    db: Session,
+    connection_id: int,
+    original_sql: str,
+    result_json: str,
+) -> SqlOptimizationRecord:
+    """创建 SQL 优化记录"""
+    record = SqlOptimizationRecord(
+        connection_id=connection_id,
+        original_sql=original_sql,
+        result_json=result_json,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def get_sql_optimization_record(db: Session, record_id: int) -> Optional[SqlOptimizationRecord]:
+    """获取单条 SQL 优化记录"""
+    return db.execute(
+        select(SqlOptimizationRecord).where(SqlOptimizationRecord.id == record_id)
+    ).scalar_one_or_none()
+
+
+def get_sql_optimization_records(
+    db: Session, connection_id: int, limit: int = 50
+) -> List[SqlOptimizationRecord]:
+    """获取 SQL 优化记录列表"""
+    return list(
+        db.execute(
+            select(SqlOptimizationRecord)
+            .where(SqlOptimizationRecord.connection_id == connection_id)
+            .order_by(SqlOptimizationRecord.created_at.desc())
+            .limit(limit)
+        ).scalars().all()
+    )
+
+
+def delete_sql_optimization_record(db: Session, record_id: int) -> bool:
+    """删除 SQL 优化记录"""
+    record = get_sql_optimization_record(db, record_id)
+    if not record:
+        return False
+    db.delete(record)
+    db.commit()
+    return True
+
+
+# ==================== EXPLAIN 分析记录 CRUD ====================
+
+def create_explain_analysis_record(
+    db: Session,
+    connection_id: int,
+    sql: str,
+    result_json: str,
+) -> ExplainAnalysisRecord:
+    """创建 EXPLAIN 分析记录"""
+    record = ExplainAnalysisRecord(
+        connection_id=connection_id,
+        sql=sql,
+        result_json=result_json,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def get_explain_analysis_record(db: Session, record_id: int) -> Optional[ExplainAnalysisRecord]:
+    """获取单条 EXPLAIN 分析记录"""
+    return db.execute(
+        select(ExplainAnalysisRecord).where(ExplainAnalysisRecord.id == record_id)
+    ).scalar_one_or_none()
+
+
+def get_explain_analysis_records(
+    db: Session, connection_id: int, limit: int = 50
+) -> List[ExplainAnalysisRecord]:
+    """获取 EXPLAIN 分析记录列表"""
+    return list(
+        db.execute(
+            select(ExplainAnalysisRecord)
+            .where(ExplainAnalysisRecord.connection_id == connection_id)
+            .order_by(ExplainAnalysisRecord.created_at.desc())
+            .limit(limit)
+        ).scalars().all()
+    )
+
+
+def delete_explain_analysis_record(db: Session, record_id: int) -> bool:
+    """删除 EXPLAIN 分析记录"""
+    record = get_explain_analysis_record(db, record_id)
+    if not record:
+        return False
+    db.delete(record)
     db.commit()
     return True

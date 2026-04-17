@@ -35,7 +35,7 @@ export const useAppStore = defineStore(
     const layoutSideCollapsedWidth = ref(64)
     const layoutSideCollapsed = ref(false)
     const visitedViews = ref<VisitedView[]>([
-      { path: '/dashboard', meta: { title: '仪表盘', affix: true } }
+      { path: '/ai-diagnostic', meta: { title: 'AI 诊断', affix: true } }
     ])
 
     const toggleDarkMode = () => {

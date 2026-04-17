@@ -181,7 +181,7 @@ const switchMode = () => {
             show-password
             @keyup.enter="handleSubmit"
           />
-          <div v-if="form.password" class="password-strength">
+          <div v-if="isRegisterMode && form.password" class="password-strength">
             <div class="strength-bar">
               <div
                 class="strength-fill"

@@ -42,6 +42,28 @@ class DiagnosisMessage(Base):
     session = relationship("DiagnosisSession", back_populates="messages")
 
 
+class SqlOptimizationRecord(Base):
+    """SQL 优化历史记录"""
+    __tablename__ = "sql_optimization_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connection_id = Column(Integer, nullable=False, index=True)
+    original_sql = Column(Text, nullable=False)
+    result_json = Column(Text, nullable=False)  # 完整优化结果 JSON
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ExplainAnalysisRecord(Base):
+    """EXPLAIN 分析历史记录"""
+    __tablename__ = "explain_analysis_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connection_id = Column(Integer, nullable=False, index=True)
+    sql = Column(Text, nullable=False)
+    result_json = Column(Text, nullable=False)  # 完整分析结果 JSON
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class DiagnosisReport(Base):
     """诊断报告"""
     __tablename__ = "diagnosis_reports"

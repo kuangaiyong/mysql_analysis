@@ -5,10 +5,19 @@
 </template>
 
 <script setup lang="ts">
-import zhCn from 'element-plus/es/locale/lang/zh-cn.mjs'
+import { onMounted } from 'vue'
+import zhCn from 'element-plus/dist/locale/zh-cn.js'
+import { useAppStore } from '@/pinia/modules/app'
 
 defineOptions({
   name: 'App'
+})
+
+onMounted(() => {
+  const appStore = useAppStore()
+  if (appStore.darkMode === 'dark') {
+    document.documentElement.classList.add('dark')
+  }
 })
 </script>
 

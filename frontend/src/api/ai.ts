@@ -739,3 +739,266 @@ export async function executeSQL(request: ExecuteSQLRequest): Promise<ExecuteSQL
   const response = await client.post('/ai/execute-sql', request)
   return response.data
 }
+
+
+// ==================== SQL 优化历史记录 ====================
+
+export interface SqlOptRecord {
+  id: number
+  connection_id: number
+  original_sql: string
+  created_at: string
+}
+
+export interface SqlOptRecordDetail extends SqlOptRecord {
+  result: Record<string, any>
+}
+
+export async function getSqlOptRecords(connectionId: number, limit = 50): Promise<SqlOptRecord[]> {
+  const response = await client.get('/ai/sql-optimization-records', {
+    params: { connection_id: connectionId, limit }
+  })
+  return response.data
+}
+
+export async function getSqlOptRecordDetail(recordId: number): Promise<SqlOptRecordDetail> {
+  const response = await client.get(`/ai/sql-optimization-records/${recordId}`)
+  return response.data
+}
+
+export async function deleteSqlOptRecord(recordId: number): Promise<void> {
+  await client.delete(`/ai/sql-optimization-records/${recordId}`)
+}
+
+export async function saveSqlOptRecord(connectionId: number, originalSql: string, result: Record<string, any>): Promise<{ success: boolean; id: number }> {
+  const response = await client.post('/ai/sql-optimization-records/save', {
+    connection_id: connectionId,
+    original_sql: originalSql,
+    result,
+  })
+  return response.data
+}
+
+
+// ==================== EXPLAIN 分析历史记录 ====================
+
+export interface ExplainRecord {
+  id: number
+  connection_id: number
+  sql: string
+  created_at: string
+}
+
+export interface ExplainRecordDetail extends ExplainRecord {
+  result: Record<string, any>
+}
+
+export async function getExplainRecords(connectionId: number, limit = 50): Promise<ExplainRecord[]> {
+  const response = await client.get('/ai/explain-analysis-records', {
+    params: { connection_id: connectionId, limit }
+  })
+  return response.data
+}
+
+export async function getExplainRecordDetail(recordId: number): Promise<ExplainRecordDetail> {
+  const response = await client.get(`/ai/explain-analysis-records/${recordId}`)
+  return response.data
+}
+
+export async function deleteExplainRecord(recordId: number): Promise<void> {
+  await client.delete(`/ai/explain-analysis-records/${recordId}`)
+}
+
+export async function saveExplainRecord(connectionId: number, sql: string, result: Record<string, any>): Promise<{ success: boolean; id: number }> {
+  const response = await client.post('/ai/explain-analysis-records/save', {
+    connection_id: connectionId,
+    sql,
+    result,
+  })
+  return response.data
+}
+
+
+// ==================== 5 个新 AI 模块 SSE 流式 ====================
+
+/** 通用分析模块 SSE 流式请求 */
+function createAnalysisStream(
+  path: string,
+  connectionId: number,
+  callbacks: {
+    onStatus?: (data: any) => void
+    onContext?: (data: any) => void
+    onAnalysis?: (data: any) => void
+    onChunk?: (text: string) => void
+    onResult?: (data: any) => void
+    onError?: (error: string) => void
+  }
+): AbortController {
+  const controller = new AbortController()
+  const baseURL = client.defaults.baseURL || ''
+  const url = `${baseURL}${path}`
+
+  fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${getToken() || ''}`,
+    },
+    body: JSON.stringify({ connection_id: connectionId }),
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        callbacks.onError?.(`HTTP ${response.status}`)
+        return
+      }
+      const reader = response.body?.getReader()
+      if (!reader) return
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        let currentEvent = ''
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            currentEvent = line.substring(6).trim()
+          } else if (line.startsWith('data:') && currentEvent) {
+            try {
+              const data = JSON.parse(line.substring(5).trim())
+              switch (currentEvent) {
+                case 'status': callbacks.onStatus?.(data); break
+                case 'context': callbacks.onContext?.(data); break
+                case 'analysis': callbacks.onAnalysis?.(data); break
+                case 'chunk': callbacks.onChunk?.(data.text || ''); break
+                case 'result': callbacks.onResult?.(data); break
+                case 'error': callbacks.onError?.(data.message || '未知错误'); break
+              }
+            } catch { /* ignore */ }
+            currentEvent = ''
+          }
+        }
+      }
+    })
+    .catch((err) => {
+      if (err.name !== 'AbortError') {
+        callbacks.onError?.(err.message || '网络错误')
+      }
+    })
+
+  return controller
+}
+
+export type AnalysisCallbacks = {
+  onStatus?: (data: any) => void
+  onContext?: (data: any) => void
+  onAnalysis?: (data: any) => void
+  onChunk?: (text: string) => void
+  onResult?: (data: any) => void
+  onError?: (error: string) => void
+}
+
+/** AI 索引顾问 */
+export function indexAdvisorStream(connectionId: number, callbacks: AnalysisCallbacks): AbortController {
+  return createAnalysisStream('/ai/index-advisor/stream', connectionId, callbacks)
+}
+
+/** AI 锁分析 */
+export function lockAnalysisStream(connectionId: number, callbacks: AnalysisCallbacks): AbortController {
+  return createAnalysisStream('/ai/lock-analysis/stream', connectionId, callbacks)
+}
+
+/** AI 慢查询巡检 */
+export function slowQueryPatrolStream(connectionId: number, callbacks: AnalysisCallbacks): AbortController {
+  return createAnalysisStream('/ai/slow-query-patrol/stream', connectionId, callbacks)
+}
+
+/** AI 配置调优 */
+export function configTuningStream(connectionId: number, callbacks: AnalysisCallbacks): AbortController {
+  return createAnalysisStream('/ai/config-tuning/stream', connectionId, callbacks)
+}
+
+/** AI 容量预测 */
+export function capacityPredictionStream(connectionId: number, callbacks: AnalysisCallbacks): AbortController {
+  return createAnalysisStream('/ai/capacity-prediction/stream', connectionId, callbacks)
+}
+
+
+// ==================== EXPLAIN 分析 SSE 流式 ====================
+
+export function explainAnalyzeStream(
+  connectionId: number,
+  sql: string,
+  callbacks: {
+    onStatus?: (data: any) => void
+    onContext?: (data: any) => void
+    onAnalysis?: (data: any) => void
+    onChunk?: (text: string) => void
+    onResult?: (data: any) => void
+    onError?: (error: string) => void
+  }
+): AbortController {
+  const controller = new AbortController()
+
+  const eventHandlers: Record<string, (data: any) => void> = {
+    status: (data) => callbacks.onStatus?.(data),
+    context: (data) => callbacks.onContext?.(data),
+    analysis: (data) => callbacks.onAnalysis?.(data),
+    chunk: (data) => callbacks.onChunk?.(data.text || ''),
+    result: (data) => callbacks.onResult?.(data),
+    error: (data) => callbacks.onError?.(data.message || '未知错误'),
+  }
+
+  const baseURL = client.defaults.baseURL || ''
+  const url = `${baseURL}/ai/explain-analyze/stream`
+
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connection_id: connectionId, sql }),
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        callbacks.onError?.(`HTTP ${response.status}`)
+        return
+      }
+      const reader = response.body?.getReader()
+      if (!reader) return
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        let currentEvent = ''
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim()
+          } else if (line.startsWith('data: ') && currentEvent) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              eventHandlers[currentEvent]?.(data)
+            } catch { /* ignore parse errors */ }
+            currentEvent = ''
+          }
+        }
+      }
+    })
+    .catch((err) => {
+      if (err.name !== 'AbortError') {
+        callbacks.onError?.(err.message || '网络错误')
+      }
+    })
+
+  return controller
+}

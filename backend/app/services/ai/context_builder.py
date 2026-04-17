@@ -668,6 +668,281 @@ class AIContextBuilder:
             context["table_stats"] = {}
 
         return context
+
+    async def build_index_advisor_context(self) -> Dict[str, Any]:
+        """构建索引顾问上下文"""
+        context = {
+            "connection_info": await self.get_connection_info(),
+        }
+
+        # 获取所有用户表的索引信息
+        try:
+            tables_query = """
+                SELECT TABLE_NAME, TABLE_ROWS,
+                       ROUND(DATA_LENGTH / 1024 / 1024, 2) as data_mb,
+                       ROUND(INDEX_LENGTH / 1024 / 1024, 2) as index_mb
+                FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_TYPE = 'BASE TABLE'
+                ORDER BY DATA_LENGTH DESC
+                LIMIT 30
+            """
+            tables = await self._async_query(tables_query)
+            context["table_stats"] = tables
+
+            # 获取所有索引
+            all_indexes = {}
+            for t in tables[:20]:
+                table_name = t.get("TABLE_NAME", "")
+                if table_name:
+                    all_indexes[table_name] = await self.get_table_indexes(table_name)
+            context["table_indexes"] = all_indexes
+
+            # 索引使用统计（如果 performance_schema 可用）
+            try:
+                usage_query = """
+                    SELECT OBJECT_SCHEMA, OBJECT_NAME, INDEX_NAME,
+                           COUNT_FETCH as fetch_count,
+                           COUNT_INSERT as insert_count,
+                           COUNT_UPDATE as update_count,
+                           COUNT_DELETE as delete_count
+                    FROM performance_schema.table_io_waits_summary_by_index_usage
+                    WHERE OBJECT_SCHEMA = DATABASE()
+                      AND INDEX_NAME IS NOT NULL
+                    ORDER BY COUNT_FETCH DESC
+                    LIMIT 100
+                """
+                context["index_usage_stats"] = await self._async_query(usage_query)
+            except Exception:
+                context["index_usage_stats"] = []
+
+        except Exception as e:
+            logger.error(f"构建索引顾问上下文失败: {e}")
+
+        # 慢查询（可能缺索引的）
+        context["slow_queries"] = await self.get_slow_queries(limit=15)
+
+        return context
+
+    async def build_lock_analysis_context(self) -> Dict[str, Any]:
+        """构建锁分析上下文"""
+        context = {
+            "connection_info": await self.get_connection_info(),
+        }
+
+        # 当前锁等待
+        try:
+            # MySQL 8.0+
+            lock_waits_query = """
+                SELECT
+                    r.trx_id AS waiting_trx_id,
+                    r.trx_mysql_thread_id AS waiting_thread,
+                    r.trx_query AS waiting_query,
+                    r.trx_wait_started AS wait_started,
+                    b.trx_id AS blocking_trx_id,
+                    b.trx_mysql_thread_id AS blocking_thread,
+                    b.trx_query AS blocking_query,
+                    b.trx_started AS blocking_started
+                FROM information_schema.innodb_lock_waits w
+                JOIN information_schema.innodb_trx r ON w.requesting_trx_id = r.trx_id
+                JOIN information_schema.innodb_trx b ON w.blocking_trx_id = b.trx_id
+            """
+            try:
+                context["lock_waits"] = await self._async_query(lock_waits_query)
+            except Exception:
+                # MySQL 8.0.1+ performance_schema
+                try:
+                    ps_query = """
+                        SELECT
+                            r.ENGINE_TRANSACTION_ID as waiting_trx,
+                            r.THREAD_ID as waiting_thread,
+                            b.ENGINE_TRANSACTION_ID as blocking_trx,
+                            b.THREAD_ID as blocking_thread,
+                            w.REQUESTING_ENGINE_LOCK_ID,
+                            w.BLOCKING_ENGINE_LOCK_ID
+                        FROM performance_schema.data_lock_waits w
+                        JOIN performance_schema.data_locks r ON w.REQUESTING_ENGINE_LOCK_ID = r.ENGINE_LOCK_ID
+                        JOIN performance_schema.data_locks b ON w.BLOCKING_ENGINE_LOCK_ID = b.ENGINE_LOCK_ID
+                        LIMIT 20
+                    """
+                    context["lock_waits"] = await self._async_query(ps_query)
+                except Exception:
+                    context["lock_waits"] = []
+        except Exception:
+            context["lock_waits"] = []
+
+        # InnoDB 锁信息
+        try:
+            innodb_locks_query = """
+                SELECT
+                    ENGINE_TRANSACTION_ID as trx_id,
+                    LOCK_TYPE, LOCK_MODE, LOCK_STATUS,
+                    OBJECT_SCHEMA, OBJECT_NAME,
+                    INDEX_NAME
+                FROM performance_schema.data_locks
+                LIMIT 50
+            """
+            context["innodb_locks"] = await self._async_query(innodb_locks_query)
+        except Exception:
+            try:
+                context["innodb_locks"] = await self._async_query("SELECT * FROM information_schema.innodb_locks LIMIT 50")
+            except Exception:
+                context["innodb_locks"] = []
+
+        # InnoDB 状态
+        context["innodb_status"] = await self.get_innodb_status()
+
+        # 活跃会话
+        context["active_sessions"] = await self.get_active_sessions()
+
+        # 锁等待统计
+        try:
+            lock_stats_query = """
+                SELECT
+                    EVENT_NAME,
+                    COUNT_STAR as count,
+                    SUM_TIMER_WAIT/1000000000 as total_wait_ms,
+                    AVG_TIMER_WAIT/1000000000 as avg_wait_ms
+                FROM performance_schema.events_waits_summary_global_by_event_name
+                WHERE EVENT_NAME LIKE '%lock%' AND COUNT_STAR > 0
+                ORDER BY SUM_TIMER_WAIT DESC
+                LIMIT 20
+            """
+            context["lock_wait_stats"] = await self._async_query(lock_stats_query)
+        except Exception:
+            context["lock_wait_stats"] = []
+
+        return context
+
+    async def build_slow_query_patrol_context(self) -> Dict[str, Any]:
+        """构建慢查询巡检上下文"""
+        context = {
+            "connection_info": await self.get_connection_info(),
+        }
+
+        # Top 慢查询（按总耗时）
+        context["slow_queries_by_time"] = await self.get_slow_queries(limit=20)
+
+        # Top 慢查询（按执行次数）
+        try:
+            by_count_query = """
+                SELECT
+                    DIGEST_TEXT as sql_text,
+                    COUNT_STAR as execution_count,
+                    AVG_TIMER_WAIT/1000000000 as avg_query_time_ms,
+                    SUM_TIMER_WAIT/1000000000 as total_query_time_ms,
+                    SUM_ROWS_EXAMINED as total_rows_examined,
+                    SUM_ROWS_SENT as total_rows_sent,
+                    SUM_NO_INDEX_USED as no_index_used,
+                    SUM_NO_GOOD_INDEX_USED as no_good_index_used
+                FROM performance_schema.events_statements_summary_by_digest
+                WHERE DIGEST IS NOT NULL
+                ORDER BY COUNT_STAR DESC
+                LIMIT 20
+            """
+            context["slow_queries_by_count"] = await self._async_query(by_count_query)
+        except Exception:
+            context["slow_queries_by_count"] = []
+
+        # 全表扫描查询
+        try:
+            full_scan_query = """
+                SELECT
+                    DIGEST_TEXT as sql_text,
+                    COUNT_STAR as execution_count,
+                    SUM_NO_INDEX_USED as no_index_count,
+                    AVG_TIMER_WAIT/1000000000 as avg_time_ms,
+                    SUM_ROWS_EXAMINED as rows_examined,
+                    SUM_ROWS_SENT as rows_sent
+                FROM performance_schema.events_statements_summary_by_digest
+                WHERE SUM_NO_INDEX_USED > 0 AND DIGEST IS NOT NULL
+                ORDER BY SUM_NO_INDEX_USED DESC
+                LIMIT 15
+            """
+            context["full_scan_queries"] = await self._async_query(full_scan_query)
+        except Exception:
+            context["full_scan_queries"] = []
+
+        # 慢查询配置
+        context["slow_query_config"] = await self.get_config_issues()
+
+        # 性能指标
+        context["performance_metrics"] = await self.get_performance_metrics()
+
+        return context
+
+    async def build_config_tuning_context(self) -> Dict[str, Any]:
+        """构建配置调优上下文"""
+        context = {
+            "connection_info": await self.get_connection_info(),
+        }
+
+        # 所有配置参数
+        context["config_variables"] = await self.get_config_issues()
+
+        # 运行时状态
+        try:
+            status_query = """
+                SHOW GLOBAL STATUS WHERE Variable_name IN (
+                    'Queries', 'Questions', 'Connections', 'Threads_connected',
+                    'Threads_running', 'Threads_created', 'Threads_cached',
+                    'Bytes_received', 'Bytes_sent',
+                    'Innodb_buffer_pool_read_requests', 'Innodb_buffer_pool_reads',
+                    'Innodb_buffer_pool_pages_total', 'Innodb_buffer_pool_pages_free',
+                    'Innodb_buffer_pool_pages_dirty',
+                    'Innodb_log_waits', 'Innodb_log_writes',
+                    'Innodb_rows_read', 'Innodb_rows_inserted', 'Innodb_rows_updated', 'Innodb_rows_deleted',
+                    'Created_tmp_tables', 'Created_tmp_disk_tables',
+                    'Sort_merge_passes', 'Sort_rows',
+                    'Table_locks_waited', 'Table_locks_immediate',
+                    'Open_tables', 'Opened_tables',
+                    'Max_used_connections', 'Aborted_connects', 'Aborted_clients',
+                    'Select_full_join', 'Select_scan',
+                    'Com_select', 'Com_insert', 'Com_update', 'Com_delete',
+                    'Uptime'
+                )
+            """
+            status_result = await self._async_query(status_query)
+            context["status_variables"] = {row['Variable_name']: row['Value'] for row in status_result}
+        except Exception:
+            context["status_variables"] = {}
+
+        # 性能指标
+        context["performance_metrics"] = await self.get_performance_metrics()
+
+        # 系统信息
+        try:
+            version_result = await self._async_query("SELECT VERSION() as version")
+            context["system_info"] = {
+                "mysql_version": version_result[0]["version"] if version_result else "unknown",
+            }
+        except Exception:
+            context["system_info"] = {}
+
+        return context
+
+    async def build_capacity_prediction_context(self) -> Dict[str, Any]:
+        """构建容量预测上下文"""
+        context = {
+            "connection_info": await self.get_connection_info(),
+        }
+
+        # 数据库/表大小
+        context["database_sizes"] = await self.get_database_sizes()
+
+        # 内存使用
+        context["memory_usage"] = await self.get_memory_usage()
+
+        # 连接使用情况
+        context["active_sessions"] = await self.get_active_sessions()
+
+        # 性能指标
+        context["performance_metrics"] = await self.get_performance_metrics()
+
+        # 配置参数
+        context["config_variables"] = await self.get_config_issues()
+
+        return context
     
     def _dump(self, data: Any, max_len: int = 3000) -> str:
         """JSON 序列化并截断，防止 token 爆炸"""

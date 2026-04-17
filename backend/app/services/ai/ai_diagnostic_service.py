@@ -17,6 +17,16 @@ from app.services.ai.prompts import (
     DIAGNOSIS_SYSTEM_PROMPT,
     SQL_OPTIMIZATION_SYSTEM_PROMPT,
     EXPLAIN_SYSTEM_PROMPT,
+    INDEX_ADVISOR_SYSTEM_PROMPT,
+    INDEX_ADVISOR_PROMPT_TEMPLATE,
+    LOCK_ANALYSIS_SYSTEM_PROMPT,
+    LOCK_ANALYSIS_PROMPT_TEMPLATE,
+    SLOW_QUERY_PATROL_SYSTEM_PROMPT,
+    SLOW_QUERY_PATROL_PROMPT_TEMPLATE,
+    CONFIG_TUNING_SYSTEM_PROMPT,
+    CONFIG_TUNING_PROMPT_TEMPLATE,
+    CAPACITY_PREDICTION_SYSTEM_PROMPT,
+    CAPACITY_PREDICTION_PROMPT_TEMPLATE,
     build_diagnosis_prompt,
     build_sql_optimization_prompt,
     build_explain_prompt,
@@ -514,6 +524,42 @@ class AIDiagnosticService:
             logger.error(f"EXPLAIN 解读失败: {e}")
             return {"success": False, "error": str(e), "sql": sql}
 
+    async def explain_interpret_stream(
+        self,
+        sql: str,
+        explain_result: Dict[str, Any]
+    ) -> AsyncGenerator[Tuple[str, Dict[str, Any]], None]:
+        """EXPLAIN 结果解读 - 流式版本"""
+        try:
+            yield ("status", {"message": "正在准备 EXPLAIN 分析...", "step": "init"})
+
+            prompt = build_explain_prompt(sql, explain_result)
+
+            yield ("analysis", {"message": "正在进行 AI 分析..."})
+
+            response_chunks = []
+            async for chunk in self.llm.chat_stream(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=EXPLAIN_SYSTEM_PROMPT,
+                temperature=0.3,
+            ):
+                response_chunks.append(chunk)
+                yield ("chunk", {"text": chunk})
+
+            response = "".join(response_chunks)
+
+            yield ("result", {
+                "success": True,
+                "sql": sql,
+                "interpretation": response,
+                "original_explain": explain_result,
+                "provider": self.llm.get_provider_name(),
+            })
+
+        except Exception as e:
+            logger.error(f"EXPLAIN 解读流式失败: {e}")
+            yield ("error", {"message": f"EXPLAIN 解读失败：{str(e)}", "success": False})
+
     async def quick_diagnosis(
         self,
         db: Session,
@@ -550,6 +596,313 @@ class AIDiagnosticService:
         else:
             question = "分析当前数据库所有表的索引使用情况，给出优化建议。重点关注缺失索引、冗余索引和未使用的索引。"
         return await self.diagnose(db=db, connection_id=connection_id, question=question)
+
+    async def index_advisor_stream(
+        self,
+        db: Session,
+        connection_id: int,
+    ) -> AsyncGenerator[Tuple[str, Dict[str, Any]], None]:
+        """索引顾问 - 流式版本"""
+        context_builder = None
+        try:
+            yield ("status", {"message": "正在收集索引和表结构信息...", "step": "init"})
+
+            context_builder = AIContextBuilder(db, connection_id)
+            context = await context_builder.build_index_advisor_context()
+            _d = context_builder._dump
+
+            yield ("context", {
+                "message": "数据收集完成",
+                "tables_count": len(context.get("table_stats", [])),
+            })
+
+            pre_analysis = RuleEnginePreAnalyzer.analyze_diagnostics(context) if hasattr(RuleEnginePreAnalyzer, 'analyze_diagnostics') else None
+            conn_info = context.get("connection_info", {})
+
+            prompt = INDEX_ADVISOR_PROMPT_TEMPLATE.format(
+                connection_id=connection_id,
+                database_name=conn_info.get("database", ""),
+                table_indexes=_d(context.get("table_indexes", {})),
+                index_usage_stats=_d(context.get("index_usage_stats", [])),
+                slow_queries=_d(context.get("slow_queries", [])),
+                table_stats=_d(context.get("table_stats", [])),
+                pre_analysis=f"### 规则引擎预分析\n{_d(pre_analysis)}" if pre_analysis else "",
+            )
+
+            yield ("analysis", {"message": "正在进行 AI 分析..."})
+
+            response_chunks = []
+            async for chunk in self.llm.chat_stream(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=INDEX_ADVISOR_SYSTEM_PROMPT,
+                temperature=0.3,
+            ):
+                response_chunks.append(chunk)
+                yield ("chunk", {"text": chunk})
+
+            response = "".join(response_chunks)
+            structured = parse_structured_response(response)
+
+            result = {
+                "success": True,
+                "answer": response,
+                "structured": structured,
+                "pre_analysis": pre_analysis,
+                "provider": self.llm.get_provider_name(),
+            }
+            json_str = json.dumps(result, cls=DecimalEncoder)
+            yield ("result", json.loads(json_str))
+
+        except Exception as e:
+            logger.error(f"[索引顾问-流式] 失败: {e}")
+            yield ("error", {"message": f"索引分析失败：{str(e)}", "success": False})
+        finally:
+            if context_builder:
+                context_builder.close()
+
+    async def lock_analysis_stream(
+        self,
+        db: Session,
+        connection_id: int,
+    ) -> AsyncGenerator[Tuple[str, Dict[str, Any]], None]:
+        """锁分析 - 流式版本"""
+        context_builder = None
+        try:
+            yield ("status", {"message": "正在收集锁和会话信息...", "step": "init"})
+
+            context_builder = AIContextBuilder(db, connection_id)
+            context = await context_builder.build_lock_analysis_context()
+            _d = context_builder._dump
+            conn_info = context.get("connection_info", {})
+
+            yield ("context", {
+                "message": "数据收集完成",
+                "lock_waits_count": len(context.get("lock_waits", [])),
+            })
+
+            prompt = LOCK_ANALYSIS_PROMPT_TEMPLATE.format(
+                connection_id=connection_id,
+                database_name=conn_info.get("database", ""),
+                lock_waits=_d(context.get("lock_waits", [])),
+                innodb_locks=_d(context.get("innodb_locks", [])),
+                innodb_status=_d(context.get("innodb_status", "")),
+                active_sessions=_d(context.get("active_sessions", [])),
+                lock_wait_stats=_d(context.get("lock_wait_stats", [])),
+                pre_analysis="",
+            )
+
+            yield ("analysis", {"message": "正在进行 AI 分析..."})
+
+            response_chunks = []
+            async for chunk in self.llm.chat_stream(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=LOCK_ANALYSIS_SYSTEM_PROMPT,
+                temperature=0.3,
+            ):
+                response_chunks.append(chunk)
+                yield ("chunk", {"text": chunk})
+
+            response = "".join(response_chunks)
+            structured = parse_structured_response(response)
+
+            result = {
+                "success": True,
+                "answer": response,
+                "structured": structured,
+                "provider": self.llm.get_provider_name(),
+            }
+            json_str = json.dumps(result, cls=DecimalEncoder)
+            yield ("result", json.loads(json_str))
+
+        except Exception as e:
+            logger.error(f"[锁分析-流式] 失败: {e}")
+            yield ("error", {"message": f"锁分析失败：{str(e)}", "success": False})
+        finally:
+            if context_builder:
+                context_builder.close()
+
+    async def slow_query_patrol_stream(
+        self,
+        db: Session,
+        connection_id: int,
+    ) -> AsyncGenerator[Tuple[str, Dict[str, Any]], None]:
+        """慢查询巡检 - 流式版本"""
+        context_builder = None
+        try:
+            yield ("status", {"message": "正在收集慢查询信息...", "step": "init"})
+
+            context_builder = AIContextBuilder(db, connection_id)
+            context = await context_builder.build_slow_query_patrol_context()
+            _d = context_builder._dump
+            conn_info = context.get("connection_info", {})
+
+            yield ("context", {
+                "message": "数据收集完成",
+                "slow_queries_count": len(context.get("slow_queries_by_time", [])),
+            })
+
+            prompt = SLOW_QUERY_PATROL_PROMPT_TEMPLATE.format(
+                connection_id=connection_id,
+                database_name=conn_info.get("database", ""),
+                slow_queries_by_time=_d(context.get("slow_queries_by_time", [])),
+                slow_queries_by_count=_d(context.get("slow_queries_by_count", [])),
+                full_scan_queries=_d(context.get("full_scan_queries", [])),
+                slow_query_config=_d(context.get("slow_query_config", [])),
+                performance_metrics=_d(context.get("performance_metrics", {})),
+                pre_analysis="",
+            )
+
+            yield ("analysis", {"message": "正在进行 AI 分析..."})
+
+            response_chunks = []
+            async for chunk in self.llm.chat_stream(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=SLOW_QUERY_PATROL_SYSTEM_PROMPT,
+                temperature=0.3,
+            ):
+                response_chunks.append(chunk)
+                yield ("chunk", {"text": chunk})
+
+            response = "".join(response_chunks)
+            structured = parse_structured_response(response)
+
+            result = {
+                "success": True,
+                "answer": response,
+                "structured": structured,
+                "provider": self.llm.get_provider_name(),
+            }
+            json_str = json.dumps(result, cls=DecimalEncoder)
+            yield ("result", json.loads(json_str))
+
+        except Exception as e:
+            logger.error(f"[慢查询巡检-流式] 失败: {e}")
+            yield ("error", {"message": f"慢查询巡检失败：{str(e)}", "success": False})
+        finally:
+            if context_builder:
+                context_builder.close()
+
+    async def config_tuning_stream(
+        self,
+        db: Session,
+        connection_id: int,
+    ) -> AsyncGenerator[Tuple[str, Dict[str, Any]], None]:
+        """配置调优 - 流式版本"""
+        context_builder = None
+        try:
+            yield ("status", {"message": "正在收集 MySQL 配置信息...", "step": "init"})
+
+            context_builder = AIContextBuilder(db, connection_id)
+            context = await context_builder.build_config_tuning_context()
+            _d = context_builder._dump
+            conn_info = context.get("connection_info", {})
+
+            yield ("context", {
+                "message": "数据收集完成",
+                "variables_count": len(context.get("config_variables", [])),
+            })
+
+            prompt = CONFIG_TUNING_PROMPT_TEMPLATE.format(
+                connection_id=connection_id,
+                database_name=conn_info.get("database", ""),
+                config_variables=_d(context.get("config_variables", [])),
+                status_variables=_d(context.get("status_variables", {})),
+                performance_metrics=_d(context.get("performance_metrics", {})),
+                system_info=_d(context.get("system_info", {})),
+                pre_analysis="",
+            )
+
+            yield ("analysis", {"message": "正在进行 AI 分析..."})
+
+            response_chunks = []
+            async for chunk in self.llm.chat_stream(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=CONFIG_TUNING_SYSTEM_PROMPT,
+                temperature=0.3,
+            ):
+                response_chunks.append(chunk)
+                yield ("chunk", {"text": chunk})
+
+            response = "".join(response_chunks)
+            structured = parse_structured_response(response)
+
+            result = {
+                "success": True,
+                "answer": response,
+                "structured": structured,
+                "provider": self.llm.get_provider_name(),
+            }
+            json_str = json.dumps(result, cls=DecimalEncoder)
+            yield ("result", json.loads(json_str))
+
+        except Exception as e:
+            logger.error(f"[配置调优-流式] 失败: {e}")
+            yield ("error", {"message": f"配置调优失败：{str(e)}", "success": False})
+        finally:
+            if context_builder:
+                context_builder.close()
+
+    async def capacity_prediction_stream(
+        self,
+        db: Session,
+        connection_id: int,
+    ) -> AsyncGenerator[Tuple[str, Dict[str, Any]], None]:
+        """容量预测 - 流式版本"""
+        context_builder = None
+        try:
+            yield ("status", {"message": "正在收集容量和使用量信息...", "step": "init"})
+
+            context_builder = AIContextBuilder(db, connection_id)
+            context = await context_builder.build_capacity_prediction_context()
+            _d = context_builder._dump
+            conn_info = context.get("connection_info", {})
+
+            yield ("context", {
+                "message": "数据收集完成",
+                "databases_count": len(context.get("database_sizes", [])),
+            })
+
+            prompt = CAPACITY_PREDICTION_PROMPT_TEMPLATE.format(
+                connection_id=connection_id,
+                database_name=conn_info.get("database", ""),
+                database_sizes=_d(context.get("database_sizes", [])),
+                fragmentation="（暂无碎片数据）",
+                memory_usage=_d(context.get("memory_usage", {})),
+                connection_usage=_d(context.get("active_sessions", [])),
+                performance_metrics=_d(context.get("performance_metrics", {})),
+                config_variables=_d(context.get("config_variables", [])),
+                pre_analysis="",
+            )
+
+            yield ("analysis", {"message": "正在进行 AI 分析..."})
+
+            response_chunks = []
+            async for chunk in self.llm.chat_stream(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=CAPACITY_PREDICTION_SYSTEM_PROMPT,
+                temperature=0.3,
+            ):
+                response_chunks.append(chunk)
+                yield ("chunk", {"text": chunk})
+
+            response = "".join(response_chunks)
+            structured = parse_structured_response(response)
+
+            result = {
+                "success": True,
+                "answer": response,
+                "structured": structured,
+                "provider": self.llm.get_provider_name(),
+            }
+            json_str = json.dumps(result, cls=DecimalEncoder)
+            yield ("result", json.loads(json_str))
+
+        except Exception as e:
+            logger.error(f"[容量预测-流式] 失败: {e}")
+            yield ("error", {"message": f"容量预测失败：{str(e)}", "success": False})
+        finally:
+            if context_builder:
+                context_builder.close()
 
     async def analyze_bottleneck(
         self,
