@@ -75,6 +75,18 @@ const routes: RouteRecordRaw[] = [
         name: 'CapacityPrediction',
         component: () => import('@/view/capacityPrediction/index.vue'),
         meta: { title: 'AI 容量预测', icon: 'TrendCharts' }
+      },
+      {
+        path: '/task-center',
+        name: 'TaskCenter',
+        component: () => import('@/view/taskCenter/index.vue'),
+        meta: { title: '任务中心', icon: 'List' }
+      },
+      {
+        path: '/task-detail/:id',
+        name: 'TaskDetail',
+        component: () => import('@/view/taskCenter/detail.vue'),
+        meta: { title: '任务详情', icon: 'Document' }
       }
     ]
   }

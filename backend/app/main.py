@@ -61,7 +61,8 @@ from app.database import init_db
 from app.routers import (
     auth,
     connections,
-    ai_diagnostic
+    ai_diagnostic,
+    ai_tasks,
 )
 import logging
 import traceback
@@ -170,3 +171,6 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["认证"])
 
 # AI 诊断路由
 app.include_router(ai_diagnostic.router)
+
+# 任务管理路由
+app.include_router(ai_tasks.router)

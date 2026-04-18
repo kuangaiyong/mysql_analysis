@@ -67,6 +67,7 @@ const aiMenus = [
   { path: '/ai-diagnostic', title: 'AI 诊断', icon: 'ChatDotRound' },
   { path: '/sql-optimizer', title: 'AI SQL 优化', icon: 'Edit' },
   { path: '/explain-interpret', title: 'AI EXPLAIN 解读', icon: 'DocumentCopy' },
+  { path: '/task-center', title: '任务中心', icon: 'List' },
   { path: '/health-report', title: '健康巡检报告', icon: 'Document' },
   { path: '/index-advisor', title: 'AI 索引顾问', icon: 'Grid' },
   { path: '/lock-analysis', title: 'AI 锁分析', icon: 'Lock' },

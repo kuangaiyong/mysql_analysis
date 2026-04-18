@@ -110,12 +110,12 @@ class Settings(BaseSettings):
     ai_provider: str = "zhipu"  # zhipu / kimi / openai / claude
 
     # Kimi AI (默认使用 Coding API 端点)
-    kimi_api_key: str = "sk-kimi-BiYkCMmQDdSoaRXWC36emeLAA6Ue2VTPCF8JonzygJPeR1miOfwsuTM3Qnkwrpxu"
+    kimi_api_key: str = ""
     kimi_api_base: str = "https://api.kimi.com/coding/v1"
     kimi_model: str = "kimi-for-coding"
 
     # 智谱 AI GLM (可选)
-    zhipu_api_key: str = "f3712dfcb0464e51bccd9bf4b061af18.YN8dJWSz63JPZCGc"
+    zhipu_api_key: str = ""
     zhipu_api_base: str = "https://open.bigmodel.cn/api/coding/paas/v4"
     zhipu_model: str = "GLM-5"
 
