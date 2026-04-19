@@ -2,6 +2,7 @@
 AI 诊断 API 路由
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -12,9 +13,11 @@ from sqlalchemy.orm import Session
 import json
 from decimal import Decimal
 
-from app.database import get_session as get_db
+from app.database import SessionLocal, get_session as get_db
+from app.crud import task as task_crud
 from app.services.ai.ai_diagnostic_service import AIDiagnosticService, get_ai_service
 from app.services.ai.cache import get_cache
+from app.services.ai.task_executor import submit_task
 from app.services.ai.utils import DecimalEncoder, safe_jsonify
 from app.config import settings
 from app.crud import diagnosis as diagnosis_crud
@@ -130,6 +133,120 @@ QUESTION_TYPE_MAPPING = {
     "connection_health": "请分析当前连接健康状态",
     "io_bottleneck": "请分析当前 I/O 瓶颈",
 }
+
+
+TASK_ROUTE_MAPPING = {
+    "health_report": "health-report",
+    "index_advisor": "index-advisor",
+    "lock_analysis": "lock-analysis",
+    "slow_query_patrol": "slow-query-patrol",
+    "config_tuning": "config-tuning",
+    "capacity_prediction": "capacity-prediction",
+}
+
+
+def _create_compat_task(db: Session, connection_id: int, task_type: str):
+    task = task_crud.create_task(
+        db=db,
+        connection_id=connection_id,
+        task_type=task_type,
+        payload={"connection_id": connection_id},
+        payload_summary={"connection_id": connection_id},
+        source_page=TASK_ROUTE_MAPPING.get(task_type, "task-center"),
+    )
+    task = task_crud.update_task_status(
+        db,
+        task.id,
+        "queued",
+        progress=0,
+        stage_code="queued",
+        stage_message="任务已入队",
+        force=True,
+    ) or task
+    submit_task(task.id)
+    return task
+
+
+async def _stream_task_compat(request: Request, db: Session, connection_id: int, task_type: str):
+    task = _create_compat_task(db, connection_id, task_type)
+
+    async def event_generator():
+        last_seq = 0
+        while True:
+            if await request.is_disconnected():
+                return
+
+            db_session = SessionLocal()
+            try:
+                task_db = task_crud.get_task(db_session, task.id)
+                if not task_db:
+                    yield _format_sse_event("error", {"message": "任务不存在"})
+                    return
+
+                events = task_crud.list_task_events(db_session, task.id, after_seq=last_seq, limit=200)
+                for event in events:
+                    last_seq = event.seq
+                    payload = {}
+                    if event.event_json:
+                        try:
+                            payload = json.loads(event.event_json)
+                        except json.JSONDecodeError:
+                            payload = {"message": event.event_json}
+
+                    event_type = event.event_type
+                    if event_type == "status_changed":
+                        if task_db.status == "failed":
+                            yield _format_sse_event("error", {"message": task_db.error_message or "任务失败"})
+                            return
+                        if task_db.status == "cancelled":
+                            yield _format_sse_event("error", {"message": "任务已取消"})
+                            return
+                        continue
+
+                    if event_type in {"status", "context", "analysis", "progress", "dimension", "dimension_complete", "chunk"}:
+                        yield _format_sse_event(event_type, payload)
+                    elif event_type == "result_ready" and task_db.result_json:
+                        try:
+                            result = json.loads(task_db.result_json)
+                            raw = result.get("raw", result)
+                        except json.JSONDecodeError:
+                            raw = {"message": task_db.result_json}
+                        yield _format_sse_event("result", safe_jsonify(raw))
+                        return
+                    elif event_type == "error":
+                        yield _format_sse_event("error", payload or {"message": task_db.error_message or "任务失败"})
+                        return
+
+                if task_db.status == "success" and task_db.result_json:
+                    try:
+                        result = json.loads(task_db.result_json)
+                        raw = result.get("raw", result)
+                    except json.JSONDecodeError:
+                        raw = {"message": task_db.result_json}
+                    yield _format_sse_event("result", safe_jsonify(raw))
+                    return
+
+                if task_db.status == "failed":
+                    yield _format_sse_event("error", {"message": task_db.error_message or "任务失败"})
+                    return
+
+                if task_db.status == "cancelled":
+                    yield _format_sse_event("error", {"message": "任务已取消"})
+                    return
+            finally:
+                db_session.close()
+
+            await asyncio.sleep(settings.task_stream_poll_interval)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ==================== API 端点 ====================
@@ -812,33 +929,7 @@ async def generate_report_stream(
     db: Session = Depends(get_db),
 ):
     """生成健康巡检报告 - SSE 流式响应"""
-    from app.services.ai.health_report_service import HealthReportService
-
-    async def event_generator():
-        try:
-            report_service = HealthReportService()
-
-            async for event_type, data in report_service.generate_report_stream(
-                db=db,
-                connection_id=report_request.connection_id,
-            ):
-                if await request.is_disconnected():
-                    return
-                yield _format_sse_event(event_type, safe_jsonify(data) if event_type == "result" else data)
-
-        except Exception as e:
-            logger.error(f"生成健康报告 SSE 错误: {e}")
-            yield _format_sse_event("error", {"message": str(e)})
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        }
-    )
+    return await _stream_task_compat(request, db, report_request.connection_id, "health_report")
 
 
 @router.get("/reports", response_model=List[ReportResponse])
@@ -1142,32 +1233,21 @@ async def save_explain_analysis_record(
 
 def _make_analysis_sse_endpoint(service_method_name: str, label: str):
     """工厂函数：创建通用分析 SSE 端点"""
+    task_type_map = {
+        "index_advisor_stream": "index_advisor",
+        "lock_analysis_stream": "lock_analysis",
+        "slow_query_patrol_stream": "slow_query_patrol",
+        "config_tuning_stream": "config_tuning",
+        "capacity_prediction_stream": "capacity_prediction",
+    }
+
     async def endpoint(
         request: Request,
         body: ConnectionOnlyRequest,
         db: Session = Depends(get_db),
     ):
-        async def event_generator():
-            try:
-                service = get_ai_service()
-                method = getattr(service, service_method_name)
-                async for event_type, data in method(db=db, connection_id=body.connection_id):
-                    if await request.is_disconnected():
-                        return
-                    yield _format_sse_event(event_type, safe_jsonify(data) if event_type == "result" else data)
-            except Exception as e:
-                logger.error(f"{label} SSE 错误: {e}")
-                yield _format_sse_event("error", {"message": str(e)})
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            }
-        )
+        task_type = task_type_map.get(service_method_name, "index_advisor")
+        return await _stream_task_compat(request, db, body.connection_id, task_type)
     endpoint.__doc__ = f"{label} - SSE 流式响应"
     return endpoint
 

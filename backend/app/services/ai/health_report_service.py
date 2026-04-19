@@ -75,6 +75,27 @@ class HealthReportService:
     def __init__(self):
         self.llm = get_llm_adapter()
 
+    def calibrate_health_score(
+        self,
+        dimension_results: List[Dict[str, Any]],
+        issues: List[Dict[str, Any]],
+        current_score: int,
+    ) -> int:
+        """基于问题严重度对健康评分做规则校准"""
+        adjusted = current_score
+        critical_count = sum(1 for issue in issues if issue.get("severity") == "critical")
+        warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
+
+        if critical_count:
+            adjusted = min(adjusted, 59)
+        elif warning_count >= 3:
+            adjusted = min(adjusted, 74)
+
+        if any((dim.get("score") or 0) == 0 for dim in dimension_results):
+            adjusted = min(adjusted, 65)
+
+        return max(0, min(100, adjusted))
+
     async def generate_report_stream(
         self,
         db: Session,
@@ -181,7 +202,6 @@ class HealthReportService:
 
         # 4. 计算加权总分
         health_score = self._calculate_health_score(scores)
-        logger.info(f"[健康巡检] 综合评分: {health_score}")
 
         # 5. 提取问题汇总
         yield "progress", {
@@ -191,6 +211,8 @@ class HealthReportService:
             "status": "正在汇总问题...",
         }
         issues = await self._extract_issues(dimension_results)
+        health_score = self.calibrate_health_score(dimension_results, issues, health_score)
+        logger.info(f"[健康巡检] 综合评分: {health_score}")
         logger.info(f"[健康巡检] 提取到 {len(issues)} 个问题")
 
         # 6. 构建报告

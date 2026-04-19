@@ -83,6 +83,8 @@ class AuthMiddleware:
             await self._unauthorized_response(send, "无效或过期的令牌")
             return
 
+        scope.setdefault("state", {})["user"] = payload
+
         # Token 有效，继续请求
         await self.app(scope, receive, send)
 

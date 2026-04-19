@@ -73,7 +73,7 @@ const aiMenus = [
   { path: '/lock-analysis', title: 'AI 锁分析', icon: 'Lock' },
   { path: '/slow-query-patrol', title: 'AI 慢查询巡检', icon: 'Timer' },
   { path: '/config-tuning', title: 'AI 配置调优', icon: 'SetUp' },
-  { path: '/capacity-prediction', title: 'AI 容量预测', icon: 'TrendCharts' },
+  { path: '/capacity-prediction', title: '容量风险评估', icon: 'TrendCharts' },
 ]
 </script>
 

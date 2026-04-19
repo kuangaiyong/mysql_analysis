@@ -71,7 +71,9 @@ from datetime import datetime, timezone
 # 初始化日志系统（使用增强的详细日志）
 from app.core.logging_config import app_logger
 from app.core.detailed_logging import setup_detailed_logging
+from app.middleware.ai_rate_limit import ai_rate_limit_middleware
 from app.middleware.json_serialization import JSONSerializationMiddleware
+from app.services.ai.task_executor import reconcile_stale_tasks
 
 # 设置详细日志
 setup_detailed_logging(settings.log_level)
@@ -104,6 +106,12 @@ app.add_middleware(
 
 # 认证中间件
 app.add_middleware(AuthMiddleware)
+
+
+@app.middleware("http")
+async def ai_rate_limit_http_middleware(request: Request, call_next):
+    """AI 请求限流中间件注册"""
+    return await ai_rate_limit_middleware(request, call_next)
 
 
 # 全局异常处理
@@ -160,6 +168,9 @@ async def health_check():
 async def startup_event():
     """应用启动时执行"""
     init_db()
+    stale_count = reconcile_stale_tasks()
+    if stale_count:
+        logger.warning("检测并修复 %s 个超时任务", stale_count)
 
 
 # 连接管理路由

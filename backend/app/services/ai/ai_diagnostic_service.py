@@ -105,6 +105,173 @@ def parse_structured_response(raw_response: str) -> Dict[str, Any]:
     return result
 
 
+def _stringify_value(value: Any, default: str = "") -> str:
+    """将任意值安全转换为字符串。"""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else default
+    if isinstance(value, (list, tuple, set)):
+        parts = [_stringify_value(item) for item in value]
+        joined = "、".join(part for part in parts if part)
+        return joined or default
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except TypeError:
+            return str(value)
+    return str(value)
+
+
+def _normalize_bool(value: Any) -> bool:
+    """将常见布尔表达统一转换为 bool。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return _stringify_value(value).lower() in {"1", "true", "yes", "y", "on", "是", "需要"}
+
+
+def _normalize_risk_level(value: Any, severity: str = "info") -> str:
+    """标准化风险等级。"""
+    risk = _stringify_value(value).lower()
+    if risk in {"low", "medium", "high"}:
+        return risk
+    if severity == "critical":
+        return "high"
+    if severity == "warning":
+        return "medium"
+    return "low"
+
+
+def _normalize_severity(value: Any, risk: str = "low") -> str:
+    """标准化严重等级。"""
+    severity = _stringify_value(value).lower()
+    if severity in {"critical", "warning", "info"}:
+        return severity
+    if risk == "high":
+        return "critical"
+    if risk == "medium":
+        return "warning"
+    return "info"
+
+
+def _risk_order(risk: str) -> int:
+    """风险等级排序权重。"""
+    return {"low": 1, "medium": 2, "high": 3}.get(risk, 0)
+
+
+def _build_config_tuning_risk_model(issues: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """从配置调优问题列表生成稳定的风险模型。"""
+    if not issues:
+        return {
+            "overall_risk": "low",
+            "issue_count": 0,
+            "high_risk_count": 0,
+            "medium_risk_count": 0,
+            "restart_required_count": 0,
+            "categories": [],
+        }
+
+    high_risk_count = 0
+    medium_risk_count = 0
+    restart_required_count = 0
+    category_map: Dict[str, Dict[str, Any]] = {}
+
+    for issue in issues:
+        risk = _normalize_risk_level(issue.get("risk"), _normalize_severity(issue.get("severity")))
+        category = _stringify_value(issue.get("category"), "general")
+        requires_restart = _normalize_bool(issue.get("requires_restart"))
+
+        if risk == "high":
+            high_risk_count += 1
+        elif risk == "medium":
+            medium_risk_count += 1
+
+        if requires_restart:
+            restart_required_count += 1
+
+        current = category_map.setdefault(
+            category,
+            {
+                "category": category,
+                "count": 0,
+                "highest_risk": "low",
+                "restart_required_count": 0,
+            },
+        )
+        current["count"] += 1
+        current["restart_required_count"] += 1 if requires_restart else 0
+        if _risk_order(risk) > _risk_order(current["highest_risk"]):
+            current["highest_risk"] = risk
+
+    if high_risk_count > 0 or restart_required_count >= 2:
+        overall_risk = "high"
+    elif medium_risk_count > 0 or restart_required_count > 0 or len(issues) >= 3:
+        overall_risk = "medium"
+    else:
+        overall_risk = "low"
+
+    categories = sorted(
+        category_map.values(),
+        key=lambda item: (-_risk_order(item["highest_risk"]), -item["count"], item["category"]),
+    )
+
+    return {
+        "overall_risk": overall_risk,
+        "issue_count": len(issues),
+        "high_risk_count": high_risk_count,
+        "medium_risk_count": medium_risk_count,
+        "restart_required_count": restart_required_count,
+        "categories": categories,
+    }
+
+
+def _enrich_config_tuning_structure(structured: Dict[str, Any]) -> Dict[str, Any]:
+    """为配置调优补齐稳定字段和风险模型。"""
+    normalized_issues: List[Dict[str, Any]] = []
+
+    for issue in structured.get("issues", []):
+        if not isinstance(issue, dict):
+            continue
+
+        parameter = _stringify_value(issue.get("parameter") or issue.get("title") or issue.get("name"), "未命名参数")
+        initial_severity = _normalize_severity(issue.get("severity"))
+        risk = _normalize_risk_level(issue.get("risk"), initial_severity)
+        severity = _normalize_severity(issue.get("severity"), risk)
+        reason = _stringify_value(issue.get("reason") or issue.get("detail") or issue.get("description"))
+        impact = _stringify_value(issue.get("impact") or issue.get("title") or issue.get("description"), reason)
+
+        normalized_issue = {
+            **issue,
+            "title": _stringify_value(issue.get("title") or issue.get("description"), parameter),
+            "severity": severity,
+            "category": _stringify_value(issue.get("category"), "general"),
+            "parameter": parameter,
+            "current_value": _stringify_value(issue.get("current_value"), "-"),
+            "recommended_value": _stringify_value(issue.get("recommended_value"), "-"),
+            "reason": reason,
+            "impact": impact,
+            "risk": risk,
+            "command": _stringify_value(issue.get("command") or issue.get("fix_command") or issue.get("suggestion")),
+            "requires_restart": _normalize_bool(issue.get("requires_restart")),
+        }
+        normalized_issues.append(normalized_issue)
+
+    risk_model = _build_config_tuning_risk_model(normalized_issues)
+    structured["issues"] = normalized_issues
+    structured["risk_model"] = risk_model
+
+    if not structured.get("summary"):
+        risk_label = {"low": "低", "medium": "中", "high": "高"}[risk_model["overall_risk"]]
+        structured["summary"] = f"共识别 {risk_model['issue_count']} 项配置建议，整体风险为{risk_label}。"
+
+    return structured
+
+
 class AIDiagnosticService:
     """
     AI 诊断服务
@@ -642,6 +809,7 @@ class AIDiagnosticService:
 
             response = "".join(response_chunks)
             structured = parse_structured_response(response)
+            structured = _enrich_config_tuning_structure(structured)
 
             result = {
                 "success": True,

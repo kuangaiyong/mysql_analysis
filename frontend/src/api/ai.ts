@@ -923,7 +923,7 @@ export function configTuningStream(connectionId: number, callbacks: AnalysisCall
   return createAnalysisStream('/ai/config-tuning/stream', connectionId, callbacks)
 }
 
-/** AI 容量预测 */
+/** 容量风险评估 */
 export function capacityPredictionStream(connectionId: number, callbacks: AnalysisCallbacks): AbortController {
   return createAnalysisStream('/ai/capacity-prediction/stream', connectionId, callbacks)
 }

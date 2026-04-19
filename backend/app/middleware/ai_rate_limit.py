@@ -74,14 +74,14 @@ class AIRateLimiter:
             key = self._get_redis_key(client_id)
             
             # 移除过期的请求记录
-            await self.redis.zremrangebyscore(key, 0, window_start)
+            self.redis.zremrangebyscore(key, 0, window_start)
             
             # 获取当前窗口内的请求数
-            request_count = await self.redis.zcard(key)
+            request_count = self.redis.zcard(key)
             
             if request_count >= self.max_requests:
                 # 获取最早的请求时间，计算重置时间
-                oldest = await self.redis.zrange(key, 0, 0, withscores=True)
+                oldest = self.redis.zrange(key, 0, 0, withscores=True)
                 if oldest:
                     reset_time = int(oldest[0][1] + self.window_seconds - current_time)
                 else:
@@ -89,8 +89,8 @@ class AIRateLimiter:
                 return False, 0, reset_time
             
             # 添加当前请求
-            await self.redis.zadd(key, {str(current_time): current_time})
-            await self.redis.expire(key, self.window_seconds)
+            self.redis.zadd(key, {str(current_time): current_time})
+            self.redis.expire(key, self.window_seconds)
             
             remaining = self.max_requests - request_count - 1
             return True, remaining, self.window_seconds
@@ -133,7 +133,7 @@ class AIRateLimiter:
         """重置客户端的限流计数"""
         if self.redis:
             key = self._get_redis_key(client_id)
-            await self.redis.delete(key)
+            self.redis.delete(key)
         else:
             self._memory_store.pop(client_id, None)
 

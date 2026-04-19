@@ -57,6 +57,13 @@ const props = defineProps<{ data: any }>()
 
 const dimensions = computed(() => {
   if (!props.data?.dimensions) return []
+  if (Array.isArray(props.data.dimensions)) {
+    return props.data.dimensions.map((item: any) => ({
+      name: item.name,
+      score: item.score ?? 0,
+      analysis: item.analysis ?? '',
+    }))
+  }
   return Object.entries(props.data.dimensions).map(([name, val]: [string, any]) => ({
     name,
     score: val.score ?? 0,
@@ -64,7 +71,7 @@ const dimensions = computed(() => {
   }))
 })
 
-const issues = computed(() => props.data?.issues || [])
+const issues = computed(() => props.data?.issues || props.data?.content?.issues || [])
 
 const scoreClass = computed(() => {
   const s = props.data?.health_score ?? 0

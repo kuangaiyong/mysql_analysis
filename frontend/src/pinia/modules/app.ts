@@ -14,6 +14,7 @@ export interface AppConfig {
 
 export interface VisitedView {
   path: string
+  fullPath?: string
   meta?: {
     title?: string
     icon?: string
@@ -57,14 +58,16 @@ export const useAppStore = defineStore(
     }
 
     const addView = (view: VisitedView) => {
-      const exist = visitedViews.value.some((v) => v.path === view.path)
+      const key = view.fullPath || view.path
+      const exist = visitedViews.value.some((v) => (v.fullPath || v.path) === key)
       if (!exist) {
         visitedViews.value.push(view)
       }
     }
 
     const delView = (view: VisitedView) => {
-      visitedViews.value = visitedViews.value.filter((v) => v.path !== view.path)
+      const key = view.fullPath || view.path
+      visitedViews.value = visitedViews.value.filter((v) => (v.fullPath || v.path) !== key)
     }
 
     const delOthersViews = (view: VisitedView) => {

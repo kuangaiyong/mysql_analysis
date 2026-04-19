@@ -10,14 +10,23 @@ export interface TaskItem {
   id: number
   connection_id: number
   task_type: string
-  status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
+  status: 'pending' | 'queued' | 'running' | 'retry_waiting' | 'success' | 'failed' | 'cancelled' | 'timed_out' | 'cancel_requested'
   title: string
   progress: number
+  stage_code?: string | null
+  stage_message?: string
   progress_message: string
   result_json: string | null
+  result_schema_version?: number
+  error_code?: string | null
   error_message: string | null
   retry_count: number
   max_retries: number
+  source_page?: string | null
+  payload_summary?: Record<string, any> | null
+  worker_id?: string | null
+  heartbeat_at?: string | null
+  cancel_requested_at?: string | null
   started_at: string | null
   completed_at: string | null
   created_at: string | null
@@ -30,12 +39,27 @@ export interface CreateTaskRequest {
   connection_id: number
   task_type: string
   title?: string
+  payload?: Record<string, any>
+  source_page?: string
 }
 
 export interface TaskListResponse {
   success: boolean
   data: TaskItem[]
   total: number
+  stats?: Record<string, number>
+  summary?: Record<string, number>
+}
+
+export interface TaskEventItem {
+  id: number
+  task_id: number
+  seq: number
+  event_type: string
+  progress: number | null
+  stage_code: string | null
+  event: Record<string, any> | string | null
+  created_at: string | null
 }
 
 export const taskApi = {
@@ -79,37 +103,92 @@ export const taskApi = {
     await client.delete(`/tasks/${taskId}`)
   },
 
-  /** 订阅任务进度 SSE */
-  subscribeProgress(
+  async listEvents(taskId: number, params?: { after_seq?: number; limit?: number }): Promise<TaskEventItem[]> {
+    const res = await client.get(`/tasks/${taskId}/events`, { params })
+    return res.data.data || []
+  },
+
+  /** 订阅任务事件流 */
+  subscribeEvents(
     taskId: number,
     callbacks: {
-      onProgress?: (data: { task_id: number; status: string; progress: number; message: string }) => void
+      onEvent?: (data: TaskEventItem) => void
       onComplete?: (data: { task_id: number; status: string; progress: number; message: string }) => void
       onError?: (err: string) => void
-    },
-  ): EventSource {
-    const url = `${config.baseApi}/tasks/${taskId}/progress`
-    const es = new EventSource(url)
+    }
+  ): AbortController {
+    const controller = new AbortController()
+    const url = `${config.baseApi}/tasks/${taskId}/events/stream`
 
-    es.addEventListener('progress', (e) => {
-      try {
-        callbacks.onProgress?.(JSON.parse(e.data))
-      } catch { /* ignore */ }
+    fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${getToken() || ''}`,
+        Accept: 'text/event-stream',
+      },
+      signal: controller.signal,
     })
+      .then(async (response) => {
+        if (!response.ok) {
+          callbacks.onError?.(`HTTP ${response.status}`)
+          return
+        }
+        const reader = response.body?.getReader()
+        if (!reader) {
+          callbacks.onError?.('无法建立事件流')
+          return
+        }
 
-    es.addEventListener('complete', (e) => {
-      try {
-        callbacks.onComplete?.(JSON.parse(e.data))
-      } catch { /* ignore */ }
-      es.close()
-    })
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let currentEvent = ''
+        let dataLines: string[] = []
 
-    es.addEventListener('error', () => {
-      callbacks.onError?.('连接中断')
-      es.close()
-    })
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
 
-    return es
+          for (const line of lines) {
+            if (line.startsWith('event:')) {
+              currentEvent = line.substring(6).trim()
+            } else if (line.startsWith('data:')) {
+              dataLines.push(line.substring(5).trim())
+            } else if (line === '' && currentEvent) {
+              const payload = dataLines.join('\n')
+              dataLines = []
+              try {
+                const data = JSON.parse(payload)
+                if (currentEvent === 'event') {
+                  callbacks.onEvent?.(data)
+                } else if (currentEvent === 'complete') {
+                  callbacks.onComplete?.(data)
+                  controller.abort()
+                  return
+                } else if (currentEvent === 'error') {
+                  callbacks.onError?.(data.message || '事件流异常')
+                  controller.abort()
+                  return
+                }
+              } catch {
+                callbacks.onError?.('任务事件解析失败')
+                controller.abort()
+                return
+              }
+              currentEvent = ''
+            }
+          }
+        }
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') {
+          callbacks.onError?.(err.message || '连接中断')
+        }
+      })
+
+    return controller
   },
 }
 
@@ -120,14 +199,18 @@ export const TASK_TYPE_MAP: Record<string, { label: string; icon: string }> = {
   lock_analysis: { label: 'AI 锁分析', icon: 'Lock' },
   slow_query_patrol: { label: 'AI 慢查询巡检', icon: 'Timer' },
   config_tuning: { label: 'AI 配置调优', icon: 'SetUp' },
-  capacity_prediction: { label: 'AI 容量预测', icon: 'TrendCharts' },
+  capacity_prediction: { label: '容量风险评估', icon: 'TrendCharts' },
 }
 
 /** 状态映射 */
 export const TASK_STATUS_MAP: Record<string, { label: string; type: string }> = {
   pending: { label: '等待中', type: 'info' },
+  queued: { label: '已入队', type: 'info' },
   running: { label: '运行中', type: '' },
+  retry_waiting: { label: '等待重试', type: 'warning' },
   success: { label: '已完成', type: 'success' },
   failed: { label: '失败', type: 'danger' },
   cancelled: { label: '已取消', type: 'warning' },
+  cancel_requested: { label: '取消中', type: 'warning' },
+  timed_out: { label: '超时', type: 'danger' },
 }

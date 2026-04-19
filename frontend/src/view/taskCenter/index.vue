@@ -1,9 +1,12 @@
 <template>
   <div class="page-container task-center-page">
     <div class="header">
-      <div class="title">
-        <el-icon :size="24"><List /></el-icon>
-        <h2>任务中心</h2>
+      <div class="title-wrap">
+        <div class="title">
+          <el-icon :size="24"><List /></el-icon>
+          <h2>任务中心</h2>
+        </div>
+        <div class="sub-title">统一承载健康巡检、索引顾问、锁分析、慢查询巡检、配置调优与容量风险评估</div>
       </div>
       <div class="actions">
         <el-dropdown @command="handleCreateTask" :disabled="!selectedConnectionId">
@@ -24,121 +27,137 @@
       </div>
     </div>
 
-    <!-- 筛选栏 -->
-    <div class="filter-bar">
-      <el-select v-model="filterType" placeholder="任务类型" clearable style="width: 160px" @change="refreshList">
-        <el-option v-for="(info, type) in TASK_TYPE_MAP" :key="type" :label="info.label" :value="type" />
-      </el-select>
-      <el-select v-model="filterStatus" placeholder="状态" clearable style="width: 120px" @change="refreshList">
-        <el-option v-for="(info, key) in TASK_STATUS_MAP" :key="key" :label="info.label" :value="key" />
-      </el-select>
+    <div class="stats-grid">
+      <el-card v-for="card in statCards" :key="card.key" shadow="hover" class="stat-card">
+        <div class="stat-label">{{ card.label }}</div>
+        <div class="stat-value">{{ card.value }}</div>
+      </el-card>
     </div>
 
-    <!-- 任务列表 -->
-    <el-table :data="taskStore.tasks" v-loading="taskStore.loading" stripe border style="width: 100%">
-      <el-table-column label="ID" prop="id" width="60" align="center" />
-      <el-table-column label="任务类型" width="160">
-        <template #default="{ row }">
-          {{ TASK_TYPE_MAP[row.task_type]?.label || row.task_type }}
-        </template>
-      </el-table-column>
-      <el-table-column label="标题" prop="title" min-width="180" show-overflow-tooltip />
-      <el-table-column label="状态" width="100" align="center">
-        <template #default="{ row }">
-          <el-tag :type="TASK_STATUS_MAP[row.status]?.type || 'info'" size="small" effect="dark">
-            {{ TASK_STATUS_MAP[row.status]?.label || row.status }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="进度" width="180">
-        <template #default="{ row }">
-          <el-progress
-            v-if="row.status === 'running'"
-            :percentage="row.live_progress ?? row.progress"
-            :stroke-width="14"
-            :text-inside="true"
-          />
-          <el-progress
-            v-else-if="row.status === 'success'"
-            :percentage="100"
-            :stroke-width="14"
-            :text-inside="true"
-            status="success"
-          />
-          <span v-else-if="row.status === 'failed'" class="text-danger">{{ row.error_message || '失败' }}</span>
-          <span v-else>-</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="重试" width="70" align="center">
-        <template #default="{ row }">
-          {{ row.retry_count }}/{{ row.max_retries }}
-        </template>
-      </el-table-column>
-      <el-table-column label="创建时间" width="170">
-        <template #default="{ row }">
-          {{ formatTime(row.created_at) }}
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="200" align="center" fixed="right">
-        <template #default="{ row }">
-          <el-button v-if="row.status === 'success'" type="primary" link size="small" @click="viewDetail(row)">查看结果</el-button>
-          <el-button v-if="row.status === 'failed' && row.retry_count < row.max_retries" type="warning" link size="small" @click="handleRetry(row)">重试</el-button>
-          <el-button v-if="row.status === 'running' || row.status === 'pending'" type="warning" link size="small" @click="handleCancel(row)">取消</el-button>
-          <el-popconfirm title="确定删除该任务？" @confirm="handleDelete(row)">
-            <template #reference>
-              <el-button type="danger" link size="small">删除</el-button>
-            </template>
-          </el-popconfirm>
-        </template>
-      </el-table-column>
-    </el-table>
+    <el-card shadow="never" class="filter-panel">
+      <div class="filter-bar">
+        <div class="filter-item current-connection">
+          <span class="label">当前连接</span>
+          <span class="value">{{ connectionLabel }}</span>
+        </div>
+        <el-select v-model="filterType" placeholder="任务类型" clearable class="filter-select" @change="handleFilterChange">
+          <el-option v-for="(info, type) in TASK_TYPE_MAP" :key="type" :label="info.label" :value="type" />
+        </el-select>
+        <el-select v-model="filterStatus" placeholder="状态" clearable class="filter-select" @change="handleFilterChange">
+          <el-option v-for="(info, key) in TASK_STATUS_MAP" :key="key" :label="info.label" :value="key" />
+        </el-select>
+      </div>
+    </el-card>
 
-    <!-- 分页 -->
-    <div class="pagination-bar" v-if="taskStore.total > pageSize">
-      <el-pagination
-        v-model:current-page="currentPage"
-        :page-size="pageSize"
-        :total="taskStore.total"
-        layout="total, prev, pager, next"
-        @current-change="handlePageChange"
-      />
-    </div>
+    <el-card shadow="never" class="table-panel">
+      <el-table :data="taskStore.tasks" v-loading="taskStore.loading" stripe>
+        <el-table-column label="ID" prop="id" width="70" align="center" />
+        <el-table-column label="任务类型" width="180">
+          <template #default="{ row }">
+            {{ TASK_TYPE_MAP[row.task_type]?.label || row.task_type }}
+          </template>
+        </el-table-column>
+        <el-table-column label="标题" prop="title" min-width="220" show-overflow-tooltip />
+        <el-table-column label="状态" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="TASK_STATUS_MAP[row.status]?.type || 'info'" size="small" effect="dark">
+              {{ TASK_STATUS_MAP[row.status]?.label || row.status }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="阶段" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.stage_message || row.progress_message || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="进度" width="180">
+          <template #default="{ row }">
+            <el-progress :percentage="row.live_progress ?? row.progress ?? 0" :stroke-width="12" :text-inside="true" />
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="170">
+          <template #default="{ row }">
+            {{ formatTime(row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="220" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="viewDetail(row)">查看详情</el-button>
+            <el-button v-if="row.status === 'failed' && row.retry_count < row.max_retries" type="warning" link size="small" @click="handleRetry(row)">重试</el-button>
+            <el-button v-if="['running', 'queued', 'pending', 'cancel_requested'].includes(row.status)" type="warning" link size="small" @click="handleCancel(row)">取消</el-button>
+            <el-popconfirm title="确定删除该任务？" @confirm="handleDelete(row)">
+              <template #reference>
+                <el-button v-if="!['running', 'queued', 'pending', 'cancel_requested'].includes(row.status)" type="danger" link size="small">删除</el-button>
+              </template>
+            </el-popconfirm>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div class="pagination-bar" v-if="taskStore.total > pageSize">
+        <el-pagination
+          v-model:current-page="currentPage"
+          :page-size="pageSize"
+          :total="taskStore.total"
+          layout="total, prev, pager, next"
+          @current-change="handlePageChange"
+        />
+      </div>
+    </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { List, ArrowDown, Refresh } from '@element-plus/icons-vue'
+import { ArrowDown, List, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+
+import { TASK_STATUS_MAP, TASK_TYPE_MAP, type TaskItem } from '@/api/task'
 import { useConnectionStore } from '@/pinia/modules/connection'
 import { useTaskStore } from '@/pinia/modules/task'
-import { taskApi, TASK_TYPE_MAP, TASK_STATUS_MAP } from '@/api/task'
 
 const router = useRouter()
 const connectionStore = useConnectionStore()
 const taskStore = useTaskStore()
+
 const selectedConnectionId = computed(() => connectionStore.selectedConnectionId)
+const selectedConnection = computed(() => connectionStore.selectedConnection)
 
 const filterType = ref('')
 const filterStatus = ref('')
 const currentPage = ref(1)
 const pageSize = 20
-
-// 自动刷新定时器
 let refreshTimer: ReturnType<typeof setInterval> | null = null
+
+const connectionLabel = computed(() => {
+  if (!selectedConnection.value) return '未选择连接'
+  return `${selectedConnection.value.name} (${selectedConnection.value.host}:${selectedConnection.value.port})`
+})
+
+const statCards = computed(() => [
+  { key: 'total', label: '总任务数', value: taskStore.summary.total || taskStore.total },
+  { key: 'running', label: '运行中', value: (taskStore.summary.running || 0) + (taskStore.summary.queued || 0) },
+  { key: 'completed', label: '已完成', value: taskStore.summary.completed || 0 },
+  { key: 'failed', label: '失败/取消', value: (taskStore.summary.failed || 0) + (taskStore.summary.cancelled || 0) },
+])
 
 onMounted(() => {
   refreshList()
-  // 每 5 秒自动刷新（有运行中任务时）
   refreshTimer = setInterval(() => {
-    const hasRunning = taskStore.tasks.some((t) => t.status === 'running' || t.status === 'pending')
-    if (hasRunning) refreshList()
+    if (taskStore.hasRunningTask) {
+      refreshList()
+    }
   }, 5000)
 })
 
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
+})
+
+watch(selectedConnectionId, () => {
+  currentPage.value = 1
+  refreshList()
 })
 
 function refreshList() {
@@ -149,6 +168,11 @@ function refreshList() {
     limit: pageSize,
     offset: (currentPage.value - 1) * pageSize,
   })
+}
+
+function handleFilterChange() {
+  currentPage.value = 1
+  refreshList()
 }
 
 function handlePageChange(page: number) {
@@ -164,32 +188,40 @@ async function handleCreateTask(taskType: string) {
   const task = await taskStore.createTask({
     connection_id: selectedConnectionId.value,
     task_type: taskType,
+    payload: { connection_id: selectedConnectionId.value },
+    source_page: 'task-center',
   })
-  if (task) {
-    ElMessage.success(`任务"${task.title}"已创建`)
+  if (!task) {
+    ElMessage.error('创建任务失败')
+    return
   }
+  ElMessage.success(`任务“${task.title}”已创建`)
+  viewDetail(task)
 }
 
-async function handleRetry(row: any) {
+async function handleRetry(row: TaskItem) {
   try {
-    await taskStore.retryTask(row.id)
-    ElMessage.success('已重新提交任务')
-    refreshList()
+    const task = await taskStore.retryTask(row.id)
+    if (task) {
+      ElMessage.success('已重新提交任务')
+      viewDetail(task)
+    }
   } catch {
     ElMessage.error('重试失败')
   }
 }
 
-async function handleCancel(row: any) {
+async function handleCancel(row: TaskItem) {
   try {
     await taskStore.cancelTask(row.id)
-    ElMessage.success('任务已取消')
+    ElMessage.success('已提交取消请求')
+    refreshList()
   } catch {
     ElMessage.error('取消失败')
   }
 }
 
-async function handleDelete(row: any) {
+async function handleDelete(row: TaskItem) {
   try {
     await taskStore.deleteTask(row.id)
     ElMessage.success('任务已删除')
@@ -198,59 +230,135 @@ async function handleDelete(row: any) {
   }
 }
 
-function viewDetail(row: any) {
+function viewDetail(row: TaskItem) {
   router.push(`/task-detail/${row.id}`)
 }
 
-function formatTime(iso: string | null): string {
+function formatTime(iso: string | null | undefined) {
   if (!iso) return '-'
-  const d = new Date(iso)
-  return d.toLocaleString('zh-CN', { hour12: false })
+  return new Date(iso).toLocaleString('zh-CN', { hour12: false })
 }
 </script>
 
 <style scoped lang="scss">
 .task-center-page {
-  padding: 20px;
-  height: 100%;
   display: flex;
   flex-direction: column;
+  gap: 16px;
+}
 
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
 
-    .title {
-      display: flex;
-      align-items: center;
-      gap: 8px;
+.title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
-      h2 { margin: 0; font-size: 20px; font-weight: 600; }
-    }
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 
-    .actions {
-      display: flex;
-      gap: 8px;
-    }
+  h2 {
+    margin: 0;
+    font-size: 22px;
+  }
+}
+
+.sub-title {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.stat-card {
+  .stat-label {
+    color: var(--el-text-color-secondary);
+    font-size: 13px;
   }
 
-  .filter-bar {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 16px;
+  .stat-value {
+    margin-top: 8px;
+    font-size: 28px;
+    font-weight: 700;
   }
+}
 
-  .pagination-bar {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 16px;
-  }
+.filter-panel,
+.table-panel {
+  border-radius: 12px;
+}
 
-  .text-danger {
-    color: var(--el-color-danger);
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  .label {
+    color: var(--el-text-color-secondary);
     font-size: 12px;
+  }
+
+  .value {
+    font-size: 13px;
+    font-weight: 600;
+  }
+}
+
+.current-connection {
+  min-width: 260px;
+}
+
+.filter-select {
+  width: 180px;
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+@media (max-width: 1100px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .actions {
+    width: 100%;
   }
 }
 </style>

@@ -110,7 +110,7 @@ class AIResponseCache:
         cache_key = self._generate_cache_key(connection_id, question, context_hash)
         
         if self.redis:
-            return await self._get_from_redis(cache_key)
+            return self._get_from_redis(cache_key)
         else:
             return self._get_from_memory(cache_key)
     
@@ -143,14 +143,14 @@ class AIResponseCache:
         }
         
         if self.redis:
-            await self._set_to_redis(cache_key, cache_data, ttl or self.ttl_seconds)
+            self._set_to_redis(cache_key, cache_data, ttl or self.ttl_seconds)
         else:
             self._set_to_memory(cache_key, cache_data, ttl or self.ttl_seconds)
     
-    async def _get_from_redis(self, cache_key: str) -> Optional[Dict[str, Any]]:
+    def _get_from_redis(self, cache_key: str) -> Optional[Dict[str, Any]]:
         """从 Redis 获取缓存"""
         try:
-            data = await self.redis.get(cache_key)
+            data = self.redis.get(cache_key)
             if data:
                 return json.loads(data)
             return None
@@ -158,10 +158,10 @@ class AIResponseCache:
             logger.error(f"Redis 缓存读取失败: {e}")
             return None
     
-    async def _set_to_redis(self, cache_key: str, data: Dict[str, Any], ttl: int) -> None:
+    def _set_to_redis(self, cache_key: str, data: Dict[str, Any], ttl: int) -> None:
         """设置 Redis 缓存"""
         try:
-            await self.redis.setex(cache_key, ttl, json.dumps(data, ensure_ascii=False, cls=DecimalEncoder))
+            self.redis.setex(cache_key, ttl, json.dumps(data, ensure_ascii=False, cls=DecimalEncoder))
         except Exception as e:
             logger.error(f"Redis 缓存写入失败: {e}")
     
@@ -225,12 +225,12 @@ class AIResponseCache:
                 while True:
                     cursor, keys = await self.redis.scan(cursor, match=pattern, count=100)
                     if keys:
-                        await self.redis.delete(*keys)
+                        self.redis.delete(*keys)
                     if cursor == 0:
                         break
             else:
                 # 清除所有 AI 缓存
-                await self.redis.flushdb()
+                self.redis.flushdb()
         else:
             if connection_id:
                 # 清除特定连接的缓存

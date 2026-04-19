@@ -35,11 +35,11 @@ const appStore = useAppStore()
 const visitedViews = computed(() => appStore.visitedViews)
 
 const isActive = (tag: any) => {
-  return tag.path === route.path
+  return (tag.fullPath || tag.path) === route.fullPath
 }
 
 const handleClick = (tag: any) => {
-  router.push(tag.path)
+  router.push(tag.fullPath || tag.path)
 }
 
 const handleClose = (tag: any) => {

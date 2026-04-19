@@ -17,6 +17,9 @@
           :value="conn.id"
         />
       </el-select>
+      <span v-if="connectionStore.selectedConnection" class="selected-connection-text">
+        当前连接：{{ connectionStore.selectedConnection.name }}
+      </span>
     </div>
 
     <el-divider direction="vertical" />
@@ -78,5 +81,11 @@ const toggleTheme = () => {
 <style scoped>
 .connection-selector {
   padding: 0 4px;
+}
+
+.selected-connection-text {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  white-space: nowrap;
 }
 </style>

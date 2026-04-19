@@ -74,7 +74,7 @@ const routes: RouteRecordRaw[] = [
         path: '/capacity-prediction',
         name: 'CapacityPrediction',
         component: () => import('@/view/capacityPrediction/index.vue'),
-        meta: { title: 'AI 容量预测', icon: 'TrendCharts' }
+        meta: { title: '容量风险评估', icon: 'TrendCharts' }
       },
       {
         path: '/task-center',
@@ -112,9 +112,13 @@ router.beforeEach((to, _from, next) => {
 router.afterEach((to) => {
   if (to.path !== '/login' && to.meta.title) {
     const appStore = useAppStore()
+    const dynamicTitle = to.name === 'TaskDetail'
+      ? `任务 #${String(to.params.id || '')}`
+      : to.meta.title as string
     appStore.addView({
       path: to.path,
-      meta: { title: to.meta.title as string, icon: to.meta.icon as string }
+      fullPath: to.fullPath,
+      meta: { title: dynamicTitle, icon: to.meta.icon as string }
     })
   }
 })

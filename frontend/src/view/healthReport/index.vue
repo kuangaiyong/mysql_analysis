@@ -9,13 +9,11 @@
       <div class="actions">
         <el-button
           type="primary"
-          :loading="generating"
-          :disabled="!selectedConnectionId"
+          :disabled="!selectedConnectionId || generating"
           @click="startGenerate"
         >
-          生成新报告
+          {{ generating ? '创建中...' : '创建巡检任务' }}
         </el-button>
-        <el-button v-if="generating" type="danger" plain @click="cancelGenerate">取消</el-button>
       </div>
     </div>
 
@@ -52,30 +50,8 @@
 
       <!-- 右侧 -->
       <div class="detail-panel">
-        <!-- 生成中 -->
-        <div v-if="generating" class="generating-state">
-          <h3>正在生成健康巡检报告...</h3>
-          <div class="progress-steps">
-            <div
-              v-for="(step, idx) in progressSteps"
-              :key="idx"
-              :class="['step', step.status]"
-            >
-              <div class="step-indicator">
-                <el-icon v-if="step.status === 'done'" color="#67C23A"><Check /></el-icon>
-                <el-icon v-else-if="step.status === 'running'" class="is-loading"><Loading /></el-icon>
-                <span v-else class="step-number">{{ idx + 1 }}</span>
-              </div>
-              <div class="step-info">
-                <span class="step-name">{{ step.name }}</span>
-                <span v-if="step.score !== undefined" class="step-score">{{ step.score }} 分</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <!-- 报告详情 -->
-        <div v-else-if="currentReport" class="report-detail">
+        <div v-if="currentReport" class="report-detail">
           <div class="score-dashboard">
             <el-progress
               type="dashboard"
@@ -181,7 +157,7 @@
         <!-- 空状态 -->
         <div v-else class="empty-state">
           <el-icon :size="64" color="#909399"><Document /></el-icon>
-          <p>选择历史报告查看，或点击"生成新报告"开始巡检</p>
+          <p>历史报告仍可查看；新的健康巡检已统一切换为任务中心执行。</p>
         </div>
       </div>
     </div>
@@ -190,33 +166,28 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { Document, Delete, Check, Loading, Download, WarningFilled } from '@element-plus/icons-vue'
+import { Document, Delete, Download, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useConnectionStore } from '@/pinia/modules/connection'
 import {
-  generateHealthReportStream,
   getReports,
   getReportDetail,
   deleteReport,
   exportReportMarkdown,
   type DimensionScore,
-  type ReportSSEListeners,
 } from '@/api/ai'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { RadarChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { useRouter } from 'vue-router'
+import { useTaskStore } from '@/pinia/modules/task'
+import { createAnalysisTaskAndOpen } from '@/view/components/analysisTaskStarter'
 
 use([RadarChart, TitleComponent, TooltipComponent, LegendComponent, CanvasRenderer])
-
-interface ProgressStep {
-  name: string
-  score?: number
-  status: 'pending' | 'running' | 'done'
-}
 
 interface ReportListItem {
   id: number
@@ -232,18 +203,14 @@ interface ReportDetail {
   created_at: string
 }
 
+const router = useRouter()
 const connectionStore = useConnectionStore()
+const taskStore = useTaskStore()
 const selectedConnectionId = computed(() => connectionStore.selectedConnectionId)
 const reports = ref<ReportListItem[]>([])
 const activeReportId = ref<number | null>(null)
 const currentReport = ref<ReportDetail | null>(null)
 const generating = ref(false)
-const progressSteps = ref<ProgressStep[]>([])
-const abortController = ref<AbortController | null>(null)
-
-// 维度名称（与后端 DIMENSIONS 对应）
-const DIM_NAMES = ['整体性能', '配置', '慢查询', '索引', 'BufferPool', '锁', '连接', 'I/O']
-
 // 从当前报告中提取问题列表
 const reportIssues = computed(() => {
   if (!currentReport.value?.content?.issues) return []
@@ -296,67 +263,19 @@ async function loadReport(reportId: number) {
   }
 }
 
-function startGenerate() {
+async function startGenerate() {
   if (!selectedConnectionId.value || generating.value) return
-
   generating.value = true
-  currentReport.value = null
-  activeReportId.value = null
-  progressSteps.value = DIM_NAMES.map((name) => ({ name, status: 'pending' }))
-
-  const listeners: ReportSSEListeners = {
-    onProgress: (data) => {
-      const idx = data.current - 1
-      if (idx >= 0 && idx < progressSteps.value.length) {
-        for (let i = 0; i < idx; i++) {
-          if (progressSteps.value[i].status !== 'done') {
-            progressSteps.value[i].status = 'done'
-          }
-        }
-        progressSteps.value[idx].status = 'running'
-        progressSteps.value[idx].name = data.dimension || progressSteps.value[idx].name
-      }
-    },
-    onDimension: (data) => {
-      const idx = progressSteps.value.findIndex((s) => s.name === data.name)
-      if (idx >= 0) {
-        progressSteps.value[idx].status = 'done'
-        progressSteps.value[idx].score = data.score
-      }
-    },
-    onResult: (data) => {
-      generating.value = false
-      abortController.value = null
-      progressSteps.value.forEach((s) => (s.status = 'done'))
-
-      currentReport.value = {
-        id: data.report_id,
-        health_score: data.health_score,
-        dimensions: data.dimensions,
-        content: data.content,
-        created_at: new Date().toISOString(),
-      }
-      activeReportId.value = data.report_id
-      loadReports()
-      ElMessage.success(`报告生成完成，综合评分: ${data.health_score} 分`)
-    },
-    onError: (data) => {
-      generating.value = false
-      abortController.value = null
-      ElMessage.error(`报告生成失败: ${data.message}`)
-    },
+  try {
+    await createAnalysisTaskAndOpen(taskStore, router, {
+      connection_id: selectedConnectionId.value,
+      task_type: 'health_report',
+      payload: { connection_id: selectedConnectionId.value },
+      source_page: 'health-report',
+    })
+  } finally {
+    generating.value = false
   }
-
-  abortController.value = generateHealthReportStream(selectedConnectionId.value, listeners)
-}
-
-function cancelGenerate() {
-  if (abortController.value) {
-    abortController.value.abort()
-    abortController.value = null
-  }
-  generating.value = false
-  ElMessage.info('已取消生成')
 }
 
 async function removeReport(reportId: number) {

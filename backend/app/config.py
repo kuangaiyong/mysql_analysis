@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     # ==================== Celery配置 ====================
     celery_broker_url: str = ""
     celery_result_backend: str = ""
+    celery_task_always_eager: bool = False
+
+    # ==================== 任务中心配置 ====================
+    task_execution_mode: str = "auto"  # auto / celery / local
+    task_queue_name: str = "analysis"
+    task_stale_timeout_seconds: int = 300
+    task_stream_poll_interval: float = 1.0
+    task_heartbeat_interval_seconds: int = 15
 
     # ==================== 性能采集配置 ====================
     metrics_collection_interval: int = 60
